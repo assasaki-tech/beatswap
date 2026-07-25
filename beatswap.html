@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BEAT SWAP — 4つ打ちビート編集機</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/libflacjs@5.4.0/dist/libflac.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
@@ -239,9 +240,9 @@ button.tap:hover{background:var(--amber);color:#1a1208;}
     <p class="section-label">01 — 音楽ファイル</p>
     <div class="dropzone" id="dropzone">
       <div>ここにドラッグ＆ドロップ、またはクリックしてファイルを選択</div>
-      <div style="font-size:11px;margin-top:4px;">対応形式: MP3 / WAV</div>
+      <div style="font-size:11px;margin-top:4px;">対応形式: MP3 / WAV / OGG / M4A・AAC / FLAC（ブラウザが対応している場合）</div>
       <div class="fname" id="fname"></div>
-      <input type="file" id="fileInput" accept=".mp3,.wav,audio/mpeg,audio/wav,audio/x-wav">
+      <input type="file" id="fileInput" accept=".mp3,.wav,.ogg,.m4a,.aac,.flac,audio/*">
     </div>
   </section>
 
@@ -301,6 +302,7 @@ button.tap:hover{background:var(--amber);color:#1a1208;}
       <select id="formatSelect">
         <option value="wav">WAV</option>
         <option value="mp3">MP3</option>
+        <option value="flac">FLAC（試験的）</option>
       </select>
       <button class="primary" id="exportBtn" disabled>出力する</button>
       <a id="downloadLink" download="beatswap_output.wav">↓ ダウンロード</a>
@@ -373,9 +375,9 @@ button.tap:hover{background:var(--amber);color:#1a1208;}
   });
 
   async function loadFile(file){
-    const okType = /\.(mp3|wav)$/i.test(file.name) || /audio\/(mpeg|wav|x-wav)/.test(file.type);
+    const okType = /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(file.name) || /^audio\//.test(file.type);
     if(!okType){
-      setStatus('MP3 または WAV ファイルを選択してください。', 'err');
+      setStatus('MP3 / WAV / OGG / M4A・AAC / FLAC のいずれかのファイルを選択してください。', 'err');
       return;
     }
     setStatus('読み込み中…');
@@ -395,7 +397,7 @@ button.tap:hover{background:var(--amber);color:#1a1208;}
       setStatus('読み込み完了。BPMとオフセットを調整してください。', 'ok');
     }catch(err){
       console.error(err);
-      setStatus('ファイルの読み込みに失敗しました: ' + err.message, 'err');
+      setStatus('ファイルの読み込みに失敗しました（お使いのブラウザがこの形式の再生に対応していない可能性があります）: ' + err.message, 'err');
     }
   }
 
@@ -744,35 +746,38 @@ button.tap:hover{background:var(--amber);color:#1a1208;}
   }
 
   // ---------- export ----------
-  exportBtn.addEventListener('click', () => {
+  exportBtn.addEventListener('click', async () => {
     if(!audioBuffer) return;
     setStatus('出力を生成中…');
     exportBtn.disabled = true;
-    setTimeout(() => {
-      try{
-        const buf = renderOutputBuffer();
-        const format = formatSelect.value;
-        let blob, extension;
-        if(format === 'wav'){
-          blob = encodeWav(buf);
-          extension = 'wav';
-        }else{
-          blob = encodeMp3(buf);
-          extension = 'mp3';
-        }
-        const url = URL.createObjectURL(blob);
-        downloadLink.href = url;
-        downloadLink.download = `${sourceFileName}_beatswap.${extension}`;
-        downloadLink.style.display = 'inline-block';
-        downloadLink.textContent = `↓ ${downloadLink.download} をダウンロード`;
-        setStatus('出力が完了しました。', 'ok');
-      }catch(err){
-        console.error(err);
-        setStatus('出力に失敗しました: ' + err.message, 'err');
-      }finally{
-        exportBtn.disabled = false;
+    try{
+      await new Promise(r => setTimeout(r, 10));
+      const buf = renderOutputBuffer();
+      const format = formatSelect.value;
+      let blob, extension;
+      if(format === 'wav'){
+        blob = encodeWav(buf);
+        extension = 'wav';
+      }else if(format === 'mp3'){
+        blob = encodeMp3(buf);
+        extension = 'mp3';
+      }else{
+        setStatus('FLACエンコーダを準備中…');
+        blob = await encodeFlac(buf);
+        extension = 'flac';
       }
-    }, 10);
+      const url = URL.createObjectURL(blob);
+      downloadLink.href = url;
+      downloadLink.download = `${sourceFileName}_beatswap.${extension}`;
+      downloadLink.style.display = 'inline-block';
+      downloadLink.textContent = `↓ ${downloadLink.download} をダウンロード`;
+      setStatus('出力が完了しました。', 'ok');
+    }catch(err){
+      console.error(err);
+      setStatus('出力に失敗しました: ' + err.message, 'err');
+    }finally{
+      exportBtn.disabled = false;
+    }
   });
 
   function encodeWav(buffer){
@@ -842,6 +847,45 @@ button.tap:hover{background:var(--amber);color:#1a1208;}
     const end = encoder.flush();
     if(end.length>0) chunks.push(end);
     return new Blob(chunks, {type:'audio/mp3'});
+  }
+  function waitForFlacReady(){
+    return new Promise((resolve, reject) => {
+      if(typeof Flac === 'undefined'){ reject(new Error('FLACライブラリを読み込めませんでした')); return; }
+      if(Flac.isReady && Flac.isReady()){ resolve(); return; }
+      const timeout = setTimeout(() => reject(new Error('FLACライブラリの初期化がタイムアウトしました')), 20000);
+      Flac.onready = () => { clearTimeout(timeout); resolve(); };
+    });
+  }
+
+  async function encodeFlac(buffer){
+    await waitForFlacReady();
+    const numCh = buffer.numberOfChannels;
+    const sr = buffer.sampleRate;
+    const encoderId = Flac.create_libflac_encoder(sr, numCh, 16, 5, 0, false);
+    if(!encoderId) throw new Error('FLACエンコーダの作成に失敗しました');
+    const chunks = [];
+    const initStatus = Flac.init_encoder_stream(encoderId, (data, numberOfBytes) => {
+      chunks.push(data.slice(0, numberOfBytes));
+    });
+    if(initStatus !== 0){
+      Flac.FLAC__stream_encoder_delete(encoderId);
+      throw new Error('FLACエンコーダの初期化に失敗しました (status ' + initStatus + ')');
+    }
+    const length = buffer.length;
+    const channels = [];
+    for(let ch=0; ch<numCh; ch++) channels.push(buffer.getChannelData(ch));
+    const interleaved = new Int32Array(length*numCh);
+    for(let i=0;i<length;i++){
+      for(let ch=0; ch<numCh; ch++){
+        let s = Math.max(-1, Math.min(1, channels[ch][i]));
+        interleaved[i*numCh+ch] = (s<0 ? s*0x8000 : s*0x7FFF) | 0;
+      }
+    }
+    const ok = Flac.FLAC__stream_encoder_process_interleaved(encoderId, interleaved, length);
+    Flac.FLAC__stream_encoder_finish(encoderId);
+    Flac.FLAC__stream_encoder_delete(encoderId);
+    if(!ok) throw new Error('FLACエンコード処理中にエラーが発生しました');
+    return new Blob(chunks, {type:'audio/flac'});
   }
 })();
 </script>

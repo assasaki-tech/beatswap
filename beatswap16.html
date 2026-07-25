@@ -159,9 +159,9 @@ button.bulkmute{font-size:8.5px;padding:2px 6px;border-color:var(--panel-line);}
     <p class="section-label">01 — 音楽ファイル</p>
     <div class="dropzone" id="dropzone">
       <div>ここにドラッグ＆ドロップ、またはクリックしてファイルを選択</div>
-      <div style="font-size:11px;margin-top:4px;">対応形式: MP3 / WAV</div>
+      <div style="font-size:11px;margin-top:4px;">対応形式: MP3 / WAV / OGG / M4A・AAC / FLAC（ブラウザが対応している場合）</div>
       <div class="fname" id="fname"></div>
-      <input type="file" id="fileInput" accept=".mp3,.wav,audio/mpeg,audio/wav,audio/x-wav">
+      <input type="file" id="fileInput" accept=".mp3,.wav,.ogg,.m4a,.aac,.flac,audio/*">
     </div>
   </section>
 
@@ -282,8 +282,8 @@ button.bulkmute{font-size:8.5px;padding:2px 6px;border-color:var(--panel-line);}
   fileInput.addEventListener('change', e => { if(e.target.files && e.target.files[0]) loadFile(e.target.files[0]); });
 
   async function loadFile(file){
-    const okType = /\.(mp3|wav)$/i.test(file.name) || /audio\/(mpeg|wav|x-wav)/.test(file.type);
-    if(!okType){ setStatus('MP3 または WAV ファイルを選択してください。', 'err'); return; }
+    const okType = /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(file.name) || /^audio\//.test(file.type);
+    if(!okType){ setStatus('MP3 / WAV / OGG / M4A・AAC / FLAC ファイルを選択してください。', 'err'); return; }
     setStatus('読み込み中…');
     try{
       ensureCtx();
