@@ -176,7 +176,7 @@ button.bulkmute{font-size:8.5px;padding:2px 6px;border-color:var(--panel-line);}
         <label>BPM</label>
         <div class="row">
           <button class="nudge" data-nudge-bpm="-1">−</button>
-          <input type="number" id="bpmInput" value="128" step="0.1" min="40" max="220">
+          <input type="number" id="bpmInput" value="128" step="1" min="40" max="220">
           <button class="nudge" data-nudge-bpm="1">＋</button>
         </div>
       </div>
@@ -186,6 +186,7 @@ button.bulkmute{font-size:8.5px;padding:2px 6px;border-color:var(--panel-line);}
           <button class="nudge" data-nudge-offset="-10">−10</button>
           <input type="number" id="offsetInput" value="0" step="1">
           <button class="nudge" data-nudge-offset="10">+10</button>
+          <button class="tap" id="offsetAutoBtn" disabled>AUTO</button>
         </div>
       </div>
       <div class="ctrl">
@@ -261,6 +262,7 @@ button.bulkmute{font-size:8.5px;padding:2px 6px;border-color:var(--panel-line);}
   const tapResetBtn = el('tapResetBtn');
   const tapReadout = el('tapReadout');
   const autoDetectBtn = el('autoDetectBtn');
+  const offsetAutoBtn = el('offsetAutoBtn');
   const resetGridBtn = el('resetGridBtn');
   const padsWrap = el('pads');
   const colHeadersWrap = el('colHeaders');
@@ -293,7 +295,7 @@ button.bulkmute{font-size:8.5px;padding:2px 6px;border-color:var(--panel-line);}
       sourceFileName = file.name.replace(/\.[^.]+$/, '');
       fname.textContent = `${file.name} (${decoded.duration.toFixed(1)}秒 / ${decoded.sampleRate}Hz / ${decoded.numberOfChannels}ch)`;
       for(let i=1;i<=N;i++){ mapping[i]=i; muted[i]=false; }
-      [tapBtn, tapResetBtn, autoDetectBtn, resetGridBtn, previewBtn, exportBtn].forEach(b => b.disabled = false);
+      [tapBtn, tapResetBtn, autoDetectBtn, offsetAutoBtn, resetGridBtn, previewBtn, exportBtn].forEach(b => b.disabled = false);
       downloadLink.style.display = 'none';
       buildPads();
       drawWaveform();
@@ -354,9 +356,9 @@ button.bulkmute{font-size:8.5px;padding:2px 6px;border-color:var(--panel-line);}
       try{
         const detected = autoDetectBPM(audioBuffer);
         bpm = detected;
-        bpmInput.value = bpm.toFixed(1);
+        bpmInput.value = bpm.toFixed(0);
         drawWaveform(); redrawPadMinis();
-        setStatus(`自動検出: ${bpm.toFixed(1)} BPM（4つ打ち前提の目安です。必要なら手動やタップテンポで微調整してください）`, 'ok');
+        setStatus(`自動検出: ${bpm.toFixed(0)} BPM（4つ打ち前提の目安です。必要なら手動やタップテンポで微調整してください）`, 'ok');
       }catch(err){
         console.error(err);
         setStatus('自動検出に失敗しました: ' + err.message, 'err');
@@ -366,7 +368,27 @@ button.bulkmute{font-size:8.5px;padding:2px 6px;border-color:var(--panel-line);}
     }, 10);
   });
 
-  function autoDetectBPM(buffer){
+  offsetAutoBtn.addEventListener('click', () => {
+    if(!audioBuffer) return;
+    setStatus('オフセットを自動検出中…');
+    offsetAutoBtn.disabled = true;
+    setTimeout(() => {
+      try{
+        const detected = autoDetectOffset(audioBuffer);
+        offsetMs = detected;
+        offsetInput.value = offsetMs.toFixed(0);
+        drawWaveform(); redrawPadMinis();
+        setStatus(`オフセット自動検出: ${offsetMs.toFixed(0)}ms（曲の中で最初にはっきり聞こえる音の立ち上がりに合わせています。ズレる場合は波形クリックや±10msで微調整してください）`, 'ok');
+      }catch(err){
+        console.error(err);
+        setStatus('オフセット自動検出に失敗しました: ' + err.message, 'err');
+      }finally{
+        offsetAutoBtn.disabled = false;
+      }
+    }, 10);
+  });
+
+  function computeOnsetEnvelope(buffer){
     const sr = buffer.sampleRate;
     const ch0 = buffer.getChannelData(0);
     const analyzeSeconds = Math.min(45, buffer.duration);
@@ -384,6 +406,11 @@ button.bulkmute{font-size:8.5px;padding:2px 6px;border-color:var(--panel-line);}
     const onset = new Float32Array(numFrames);
     for(let i=1;i<numFrames;i++){ const diff = energy[i]-energy[i-1]; onset[i] = diff>0 ? diff : 0; }
     const hopSec = hopSize/sr;
+    return {onset, hopSec, numFrames};
+  }
+
+  function autoDetectBPM(buffer){
+    const {onset, hopSec, numFrames} = computeOnsetEnvelope(buffer);
     const minBpm = 60, maxBpm = 200;
     const minLag = Math.max(1, Math.round((60/maxBpm)/hopSec));
     const maxLag = Math.round((60/minBpm)/hopSec);
@@ -396,7 +423,24 @@ button.bulkmute{font-size:8.5px;padding:2px 6px;border-color:var(--panel-line);}
     let detected = 60/(bestLag*hopSec);
     while(detected < 85) detected *= 2;
     while(detected > 190) detected /= 2;
-    return Math.max(40, Math.min(220, Math.round(detected*10)/10));
+    return Math.max(40, Math.min(220, Math.round(detected)));
+  }
+
+  function autoDetectOffset(buffer){
+    const {onset, hopSec, numFrames} = computeOnsetEnvelope(buffer);
+    let maxOnset = 0;
+    for(let i=0; i<numFrames; i++) if(onset[i] > maxOnset) maxOnset = onset[i];
+    if(maxOnset <= 0) return 0;
+    const threshold = maxOnset * 0.01;
+    let firstIdx = 0;
+    for(let i=0; i<numFrames; i++){
+      if(onset[i] >= threshold){ firstIdx = i; break; }
+    }
+    let startIdx = firstIdx;
+    for(let back=0; back<5 && startIdx-1>=0; back++){
+      if(onset[startIdx-1] > maxOnset*0.02) startIdx--; else break;
+    }
+    return Math.max(0, startIdx*hopSec*1000);
   }
 
   canvas.addEventListener('click', e => {
