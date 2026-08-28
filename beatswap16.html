@@ -143,6 +143,10 @@ button.bulkmute{font-size:8.5px;padding:2px 6px;border-color:var(--panel-line);}
 .transport button.primary{background:var(--teal-dim);border-color:var(--teal);color:#e8fff9;font-family:var(--display);letter-spacing:1px;font-size:13px;padding:9px 16px;}
 .transport button.primary:hover:not(:disabled){background:var(--teal);color:#0d211d;}
 #downloadLink{display:none;font-family:var(--display);letter-spacing:1px;font-size:13px;padding:9px 16px;background:var(--amber-dim);border:1px solid var(--amber);color:#fff0e2;border-radius:4px;text-decoration:none;}
+.seekbar-row{display:flex;align-items:center;gap:12px;margin-top:14px;}
+.seekbar-row input[type=range]{flex:1;accent-color:var(--teal);height:4px;cursor:pointer;}
+.seekbar-row input[type=range]:disabled{cursor:not-allowed;opacity:.4;}
+.time-label{font-size:12px;color:var(--text-dim);white-space:nowrap;min-width:92px;text-align:right;}
 #status{font-size:11.5px;color:var(--text-dim);padding:12px 24px 18px;min-height:16px;}
 #status.err{color:var(--red);}
 #status.ok{color:var(--teal);}
@@ -227,6 +231,10 @@ button.bulkmute{font-size:8.5px;padding:2px 6px;border-color:var(--panel-line);}
       <button class="primary" id="exportBtn" disabled>出力する</button>
       <a id="downloadLink" download="beatswap16_output.wav">↓ ダウンロード</a>
     </div>
+    <div class="seekbar-row">
+      <input type="range" id="seekBar" min="0" max="1000" value="0" step="1" disabled>
+      <span class="time-label" id="timeLabel">0:00 / 0:00</span>
+    </div>
   </section>
 
   <div id="status">ファイルを読み込んでください。</div>
@@ -245,6 +253,13 @@ button.bulkmute{font-size:8.5px;padding:2px 6px;border-color:var(--panel-line);}
   let muted = {};
   for(let i=1;i<=N;i++){ mapping[i]=i; muted[i]=false; }
   let playingNode = null;
+  let playStartCtxTime = 0;
+  let previewBuffer = null;
+  let isPlaying = false;
+  let isSeeking = false;
+  let manualStop = false;
+  let lastPosition = 0;
+  let rafId = null;
   let dragFromPos = null;
   let dragFromRow = null;
   let dragFromCol = null;
@@ -268,6 +283,8 @@ button.bulkmute{font-size:8.5px;padding:2px 6px;border-color:var(--panel-line);}
   const colHeadersWrap = el('colHeaders');
   const previewBtn = el('previewBtn');
   const stopBtn = el('stopBtn');
+  const seekBar = el('seekBar');
+  const timeLabel = el('timeLabel');
   const exportBtn = el('exportBtn');
   const formatSelect = el('formatSelect');
   const downloadLink = el('downloadLink');
@@ -726,20 +743,60 @@ button.bulkmute{font-size:8.5px;padding:2px 6px;border-color:var(--panel-line);}
   }
 
   // ---------- preview ----------
+  function formatTime(sec){
+    sec = Math.max(0, sec || 0);
+    const m = Math.floor(sec/60);
+    const s = Math.floor(sec%60);
+    return `${m}:${s.toString().padStart(2,'0')}`;
+  }
+
+  function currentPosition(){
+    if(!previewBuffer) return 0;
+    if(isPlaying) return audioCtx.currentTime - playStartCtxTime;
+    return lastPosition;
+  }
+
+  function updateSeekUI(){
+    if(!previewBuffer) return;
+    const pos = Math.min(previewBuffer.duration, Math.max(0, currentPosition()));
+    if(!isSeeking) seekBar.value = Math.round((pos/previewBuffer.duration)*1000);
+    timeLabel.textContent = `${formatTime(pos)} / ${formatTime(previewBuffer.duration)}`;
+    if(isPlaying) rafId = requestAnimationFrame(updateSeekUI);
+  }
+
+  function playFrom(offsetSec){
+    const startOffset = Math.min(Math.max(0, offsetSec), Math.max(0, previewBuffer.duration-0.001));
+    const node = audioCtx.createBufferSource();
+    node.buffer = previewBuffer;
+    node.connect(audioCtx.destination);
+    node.start(0, startOffset);
+    playStartCtxTime = audioCtx.currentTime - startOffset;
+    playingNode = node;
+    isPlaying = true;
+    stopBtn.disabled = false;
+    seekBar.disabled = false;
+    node.onended = () => {
+      if(manualStop){ manualStop = false; return; }
+      isPlaying = false;
+      lastPosition = previewBuffer.duration;
+      cancelAnimationFrame(rafId);
+      seekBar.value = 1000;
+      timeLabel.textContent = `${formatTime(previewBuffer.duration)} / ${formatTime(previewBuffer.duration)}`;
+      stopBtn.disabled = true;
+    };
+    cancelAnimationFrame(rafId);
+    updateSeekUI();
+  }
+
   previewBtn.addEventListener('click', () => {
     if(!audioBuffer) return;
-    stopPreview();
+    if(playingNode){ manualStop = true; try{ playingNode.stop(); }catch(e){} playingNode = null; }
     setStatus('レンダリング中…');
     setTimeout(() => {
       try{
-        const buf = renderOutputBuffer();
-        const node = audioCtx.createBufferSource();
-        node.buffer = buf;
-        node.connect(audioCtx.destination);
-        node.start();
-        node.onended = () => { stopBtn.disabled = true; };
-        playingNode = node;
-        stopBtn.disabled = false;
+        previewBuffer = renderOutputBuffer();
+        lastPosition = 0;
+        playFrom(0);
         setStatus('プレビュー再生中…', 'ok');
       }catch(err){
         console.error(err);
@@ -747,11 +804,42 @@ button.bulkmute{font-size:8.5px;padding:2px 6px;border-color:var(--panel-line);}
       }
     }, 10);
   });
+
   stopBtn.addEventListener('click', stopPreview);
   function stopPreview(){
-    if(playingNode){ try{ playingNode.stop(); }catch(e){} playingNode = null; }
+    if(playingNode){
+      manualStop = true;
+      try{ playingNode.stop(); }catch(e){}
+      playingNode = null;
+    }
+    isPlaying = false;
+    lastPosition = 0;
+    cancelAnimationFrame(rafId);
+    if(previewBuffer){
+      seekBar.value = 0;
+      timeLabel.textContent = `0:00 / ${formatTime(previewBuffer.duration)}`;
+    }
     stopBtn.disabled = true;
   }
+
+  seekBar.addEventListener('pointerdown', () => { isSeeking = true; });
+  seekBar.addEventListener('input', () => {
+    if(!previewBuffer) return;
+    const frac = seekBar.value/1000;
+    timeLabel.textContent = `${formatTime(frac*previewBuffer.duration)} / ${formatTime(previewBuffer.duration)}`;
+  });
+  seekBar.addEventListener('change', () => {
+    if(!previewBuffer) return;
+    const frac = seekBar.value/1000;
+    const targetSec = frac*previewBuffer.duration;
+    lastPosition = targetSec;
+    if(isPlaying){
+      manualStop = true;
+      try{ playingNode.stop(); }catch(e){}
+      playFrom(targetSec);
+    }
+    isSeeking = false;
+  });
 
   // ---------- export ----------
   exportBtn.addEventListener('click', () => {
