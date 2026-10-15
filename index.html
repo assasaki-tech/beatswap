@@ -104,6 +104,9 @@ body{
 .card.teal .cta{background:var(--teal-dim);border:1px solid var(--teal);color:#e8fff9;}
 .card.teal .cta:hover{background:var(--teal);color:#0d211d;transform:translateY(-1px);}
 
+.card.gold h2{color:#E0A458;}
+.card.gold .cta{background:#5a3b17;border:1px solid #E0A458;color:#fff3e0;}
+.card.gold .cta:hover{background:#E0A458;color:#1a1208;transform:translateY(-1px);}
 footer{
   text-align:center;
   margin-top:40px;
@@ -112,6 +115,20 @@ footer{
   line-height:1.8;
 }
 footer a{color:var(--teal);}
+.terms{
+  margin-top:44px;
+  padding-top:24px;
+  border-top:1px solid var(--panel-line);
+}
+.terms ol{
+  color:var(--text-dim);
+  font-size:11px;
+  line-height:1.9;
+  max-width:640px;
+  margin:14px auto 0;
+  padding-left:20px;
+}
+.terms li{margin-bottom:6px;}
 </style>
 </head>
 <body>
@@ -119,7 +136,7 @@ footer a{color:var(--teal);}
 
   <div class="hero">
     <h1>BEAT<span>SWAP</span> TOOLS</h1>
-    <p>4つ打り・BPM固定の楽曲向け ビート入れ替え／ミュートツール — ブラウザだけで完結</p>
+    <p>音楽制作に役立つブラウザツール集 — ビート入れ替え・琉球音階変換など、ブラウザだけで完結</p>
   </div>
 
   <div class="cards">
@@ -148,12 +165,37 @@ footer a{color:var(--teal);}
       <a class="cta" href="beatswap16.html">開く →</a>
     </div>
 
+
+    <div class="card gold">
+      <div class="tag">Music Theory</div>
+      <h2>琉球音階コンバーター</h2>
+      <p class="desc">入力したメロディ、またはMIDIファイルを琉球音階（ド・ミ・ファ・ソ・シ）に変換して、元のメロディと聴き比べできるツールです。</p>
+      <ul>
+        <li>音名入力（例: C4 D4 E4…）またはMIDIファイル（.mid / .midi）から変換</li>
+        <li>主音・テンポを指定して、変換前／変換後を再生して比較</li>
+        <li>MIDI・音声（webm）での保存、MIDI出力デバイス／SF2音源にも対応（実験的）</li>
+      </ul>
+      <a class="cta" href="ryukyu-scale.html">開く →</a>
+    </div>
+
   </div>
+
+  <section id="terms" class="terms">
+    <p class="section-label" style="text-align:center;">利用規約</p>
+    <ol>
+      <li>本サイトのツールは無償で提供されるものであり、動作の正確性・安全性・特定目的への適合性についていかなる保証もいたしません。</li>
+      <li>本ツールの利用、または利用できなかったことによって利用者に生じたいかなる損害（データの損失、機会損失等を含む）についても、運営者は一切の責任を負いません。</li>
+      <li>第三者の権利を侵害したことにより生じた紛争・損害について、運営者は一切の責任を負いません。</li>
+      <li>すべての音声処理は利用者のブラウザ内で完結し、音楽ファイルが運営者のサーバーに送信・保存されることはありません。</li>
+      <li>運営者は、予告なく本ツールの内容変更、提供の中断・終了を行うことがあります。</li>
+      <li>本規約の内容は予告なく変更されることがあります。</li>
+    </ol>
+  </section>
 
   <footer>
     すべての処理はブラウザ内（クライアントサイド）で完結し、音楽ファイルはサーバーにアップロードされません。<br>
-    対応形式（入力）: MP3 / WAV / OGG / M4A・AAC / FLAC（ブラウザが対応している場合）<br>
-    対応形式（出力）: MP3 / WAV
+    Beat Swap 対応形式（入力）: MP3 / WAV / OGG / M4A・AAC / FLAC（ブラウザが対応している場合）<br>
+    Beat Swap 対応形式（出力）: MP3 / WAV
   </footer>
 
 </div>

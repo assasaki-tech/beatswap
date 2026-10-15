@@ -1,0 +1,1017 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>琉球音階コンバーター</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.7.77/Tone.js"></script>
+<style>
+:root{
+  --bg:#122B27; --panel:#173630; --ink:#F3EDDD; --sub:#B9C9C2;
+  --accent:#E0763A; --accent2:#D4A24C; --line:#2A4A42;
+  box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:"Hiragino Mincho ProN","Yu Mincho",serif;}
+body{padding:32px 16px 60px;}
+.wrap{max-width:640px;margin:0 auto;}
+h1{font-size:1.7rem;font-weight:600;margin:0 0 4px;letter-spacing:.02em;}
+.sub{color:var(--sub);font-size:.92rem;margin:0 0 28px;font-family:sans-serif;line-height:1.7;}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:22px;margin-bottom:18px;}
+label{display:block;font-size:.82rem;color:var(--accent2);margin-bottom:8px;font-family:sans-serif;}
+input[type=text]{width:100%;background:#0E211D;border:1px solid var(--line);color:var(--ink);padding:11px 12px;border-radius:3px;font-size:1rem;font-family:sans-serif;}
+input[type=text]:focus{outline:2px solid var(--accent);}
+select{background:#0E211D;color:var(--ink);border:1px solid var(--line);padding:9px 10px;border-radius:3px;font-family:sans-serif;font-size:.95rem;}
+.row{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;}
+.row > div{flex:1;min-width:140px;}
+.hint{font-size:.78rem;color:var(--sub);margin-top:8px;font-family:sans-serif;}
+button{cursor:pointer;border:none;border-radius:3px;padding:12px 20px;font-size:.95rem;font-family:sans-serif;font-weight:600;}
+.primary{background:var(--accent);color:#1A1006;width:100%;margin-top:16px;}
+.primary:disabled{opacity:.5;cursor:default;}
+.ghost{background:transparent;border:1px solid var(--line);color:var(--ink);}
+.result{display:none;}
+.notes{font-family:sans-serif;font-size:.95rem;letter-spacing:.03em;line-height:2.1;word-break:break-word;}
+.notes .n{display:inline-block;padding:2px 8px;margin:2px;border-radius:3px;background:#0E211D;border:1px solid var(--line);}
+.notes .n.changed{border-color:var(--accent);color:var(--accent2);}
+.label-line{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}
+.label-line span{font-size:.8rem;color:var(--sub);font-family:sans-serif;}
+.play{background:var(--line);color:var(--ink);padding:6px 14px;font-size:.8rem;}
+.err{color:var(--accent);font-size:.85rem;font-family:sans-serif;margin-top:8px;display:none;}
+.site-footer{font-size:11px;color:var(--sub);line-height:1.7;margin:28px auto 0;max-width:640px;padding:14px 16px 40px;border-top:1px solid var(--line);font-family:sans-serif;}
+.site-footer a{color:var(--accent2);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>琉球音階コンバーター</h1>
+  <p class="sub">入力したメロディを琉球音階(ド・ミ・ファ・ソ・シ / 2度と6度を抜いた音階)に変換して聴き比べます。</p>
+
+  <div class="panel">
+    <label for="melody">メロディ（音名をスペース区切りで入力。例: C4 D4 E4 F4 G4 A4 B4 C5）</label>
+    <input type="text" id="melody" value="C4 D4 E4 F4 G4 A4 B4 C5">
+    <div class="hint">シャープは # 、フラットは b で入力できます（例: F#4, Bb3）</div>
+    <div class="row" style="margin-top:16px">
+      <div>
+        <label for="root">主音（ルート）</label>
+        <select id="root">
+          <option>C</option><option>C#</option><option>D</option><option>D#</option>
+          <option>E</option><option>F</option><option>F#</option><option>G</option>
+          <option>G#</option><option>A</option><option>A#</option><option>B</option>
+        </select>
+      </div>
+      <div>
+        <label for="tempo">テンポ (BPM)</label>
+        <select id="tempo">
+          <option value="80">80</option><option value="110" selected>110</option><option value="140">140</option>
+        </select>
+      </div>
+    </div>
+    <button class="primary" id="go">変換する</button>
+    <div class="err" id="err"></div>
+  </div>
+
+  <div class="panel">
+    <div class="label-line"><span>MIDI出力デバイス（実験的・対応ブラウザのみ）</span></div>
+    <div class="hint" id="midiOutStatus">「デバイスを検索」を押すと、OSに登録されているMIDI出力（Microsoft GS Wavetable Synthなど）を選べます。選ばなければブラウザ内蔵シンセで再生します。</div>
+    <div class="row" style="margin-top:12px;align-items:center">
+      <button class="ghost" id="midiOutScan">デバイスを検索</button>
+      <select id="midiOutSelect" style="display:none"></select>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="label-line"><span>SFサウンドフォント（.sf2）を読み込む</span></div>
+    <div class="hint" id="sf2Status">GM互換の.sf2ファイルを読み込むと、実際のサンプル音（ピアノ・弦・ドラムキットなど）で再生します。MIDI出力デバイスが選ばれていない場合、これが最優先で使われます。</div>
+    <div class="row" style="margin-top:10px;align-items:center">
+      <input type="file" id="sf2File" accept=".sf2" style="font-family:sans-serif;color:var(--sub);font-size:.85rem;">
+      <button class="ghost" id="sf2Clear" style="display:none">解除する</button>
+    </div>
+  </div>
+
+  <div class="panel" id="seekPanel" style="display:none">
+    <div class="label-line"><span id="seekLabel">再生中</span><span id="seekTime">0:00 / 0:00</span></div>
+    <input type="range" id="seekBar" min="0" max="1000" value="0" style="width:100%">
+  </div>
+
+  <div class="panel">
+    <div class="label-line"><span>MIDIファイルから変換（.mid / .midi）</span></div>
+    <input type="file" id="midiFile" accept=".mid,.midi" style="font-family:sans-serif;color:var(--sub);font-size:.85rem;">
+    <div class="hint" id="midiStatus">主音（上の「主音」）を使って変換します。ファイルを選ぶと自動解析されます。</div>
+    <div id="midiControls" style="display:none;margin-top:16px">
+      <div class="label-line"><span id="midiSummary"></span><button class="play" id="midiPlayOrig">元を再生</button></div>
+      <div class="notes" id="midiOrigNotes"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost" id="exportMidiFileOrig">MIDIで保存</button>
+        <button class="ghost" id="exportAudioFileOrig">音声で保存(webm・録音)</button>
+        <button class="ghost" id="exportSysFileOrig">システム音声で書き出す(実験的)</button>
+      </div>
+      <div class="hint" id="exportStatusFileOrig"></div>
+      <div style="height:14px"></div>
+      <div class="label-line"><span>琉球音階に変換後</span><button class="play" id="midiPlayConv">変換後を再生</button></div>
+      <div class="notes" id="midiConvNotes"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost" id="exportMidiFile">MIDIで保存</button>
+        <button class="ghost" id="exportAudioFile">音声で保存(webm・録音)</button>
+        <button class="ghost" id="exportSysFile">システム音声で書き出す(実験的)</button>
+      </div>
+      <div class="hint" id="exportStatusFile"></div>
+    </div>
+  </div>
+
+  <div class="panel result" id="result">
+    <div class="label-line"><span>元のメロディ</span><button class="play" data-which="orig">再生</button></div>
+    <div class="notes" id="origNotes"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="ghost" id="exportMidiTextOrig">MIDIで保存</button>
+      <button class="ghost" id="exportAudioTextOrig">音声で保存(webm・録音)</button>
+      <button class="ghost" id="exportSysTextOrig">システム音声で書き出す(実験的)</button>
+    </div>
+    <div class="hint" id="exportStatusTextOrig"></div>
+    <div style="height:18px"></div>
+    <div class="label-line"><span>琉球音階に変換後</span><button class="play" data-which="conv">再生</button></div>
+    <div class="notes" id="convNotes"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="ghost" id="exportMidiText">MIDIで保存</button>
+      <button class="ghost" id="exportAudioText">音声で保存(webm・録音)</button>
+      <button class="ghost" id="exportSysText">システム音声で書き出す(実験的)</button>
+    </div>
+    <div class="hint" id="exportStatusText"></div>
+  </div>
+</div>
+
+<script>
+const PC = {C:0,'C#':1,Db:1,D:2,'D#':3,Eb:3,E:4,F:5,'F#':6,Gb:6,G:7,'G#':8,Ab:8,A:9,'A#':10,Bb:10,B:11};
+const NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const RYUKYU_OFFSETS = [0,4,5,7,11]; // do mi fa so si
+
+function parseNote(tok){
+  const m = tok.match(/^([A-Ga-g])([#b]?)(-?\d+)$/);
+  if(!m) return null;
+  let letter = m[1].toUpperCase(), acc = m[2], oct = parseInt(m[3],10);
+  let key = letter + acc;
+  if(!(key in PC)) return null;
+  return (oct+1)*12 + PC[key];
+}
+function midiToName(m){
+  const pc = ((m%12)+12)%12, oct = Math.floor(m/12)-1;
+  return NAMES[pc]+oct;
+}
+function nearestRyukyu(midi, rootPc){
+  let pc = ((midi - rootPc) % 12 + 12) % 12;
+  let bestDiff = 0, bestDist = Infinity;
+  for(const off of RYUKYU_OFFSETS){
+    let diff = pc - off;
+    diff = ((diff + 6) % 12 + 12) % 12 - 6;
+    const dist = Math.abs(diff);
+    if(dist < bestDist){ bestDist = dist; bestDiff = diff; }
+  }
+  return midi - bestDiff;
+}
+
+let origMidis = [], convMidis = [];
+
+function render(){
+  const rootPc = PC[document.getElementById('root').value];
+  origMidis = []; convMidis = [];
+  const err = document.getElementById('err');
+  err.style.display='none';
+  const tokens = document.getElementById('melody').value.trim().split(/\s+/);
+  const origEl = document.getElementById('origNotes');
+  const convEl = document.getElementById('convNotes');
+  origEl.innerHTML=''; convEl.innerHTML='';
+  for(const t of tokens){
+    const midi = parseNote(t);
+    if(midi===null){ err.textContent = `「${t}」を音名として認識できませんでした（例: C4, F#3, Bb4）`; err.style.display='block'; return false; }
+    const conv = nearestRyukyu(midi, rootPc);
+    origMidis.push(midi); convMidis.push(conv);
+    const o = document.createElement('span'); o.className='n'; o.textContent = midiToName(midi); origEl.appendChild(o);
+    const c = document.createElement('span'); c.className='n'+(conv!==midi?' changed':''); c.textContent = midiToName(conv); convEl.appendChild(c);
+  }
+  document.getElementById('result').style.display='block';
+  return true;
+}
+
+let synth;
+let playingButton = null, stopTimer = null;
+
+let midiAccess = null, midiOutput = null, currentMode = null;
+
+document.getElementById('midiOutScan').addEventListener('click', async ()=>{
+  const status = document.getElementById('midiOutStatus');
+  if(!('requestMIDIAccess' in navigator)){ status.textContent = 'このブラウザはWeb MIDI APIに対応していません。'; return; }
+  try{
+    midiAccess = await navigator.requestMIDIAccess({sysex:false});
+    const sel = document.getElementById('midiOutSelect');
+    sel.innerHTML = '';
+    const outputs = Array.from(midiAccess.outputs.values());
+    if(outputs.length === 0){ status.textContent = 'MIDI出力デバイスが見つかりませんでした。'; sel.style.display='none'; return; }
+    const noneOpt = document.createElement('option'); noneOpt.value=''; noneOpt.textContent='（ブラウザ内蔵シンセを使う）';
+    sel.appendChild(noneOpt);
+    outputs.forEach(o=>{ const opt=document.createElement('option'); opt.value=o.id; opt.textContent=o.name; sel.appendChild(opt); });
+    const gs = outputs.find(o=>/GS Wavetable/i.test(o.name));
+    if(gs){ sel.value = gs.id; midiOutput = gs; } else { midiOutput = null; }
+    sel.style.display = 'inline-block';
+    status.textContent = `${outputs.length}個のMIDI出力が見つかりました。${gs ? '「'+gs.name+'」を自動選択しました。' : '使うデバイスを選んでください。'}`;
+  }catch(err){
+    status.textContent = 'MIDIアクセスが許可されませんでした: ' + err.message;
+  }
+});
+document.getElementById('midiOutSelect').addEventListener('change', (e)=>{
+  if(playingButton) stopPlayback();
+  const id = e.target.value;
+  midiOutput = id ? midiAccess.outputs.get(id) : null;
+});
+
+let midiTimeouts = [];
+
+function stopMidiOutput(){
+  midiTimeouts.forEach(id=> clearTimeout(id));
+  midiTimeouts = [];
+  if(!midiOutput) return;
+  try{ midiOutput.clear(); }catch(e){}
+  for(let ch=0; ch<16; ch++){
+    try{ midiOutput.send([0xB0|ch, 123, 0]); midiOutput.send([0xB0|ch, 120, 0]); }catch(e){}
+  }
+}
+
+let activePlayback = null; // {notes, button, totalSeconds, offset, startPerf}
+
+function fmtTime(s){
+  s = Math.max(0, s||0);
+  const m = Math.floor(s/60), sec = Math.floor(s%60);
+  return m+':'+String(sec).padStart(2,'0');
+}
+
+function showSeekBar(label, totalSeconds){
+  document.getElementById('seekPanel').style.display = 'block';
+  document.getElementById('seekLabel').textContent = label;
+  document.getElementById('seekBar').value = 0;
+  document.getElementById('seekTime').textContent = fmtTime(0)+' / '+fmtTime(totalSeconds);
+}
+function hideSeekBar(){
+  document.getElementById('seekPanel').style.display = 'none';
+}
+
+let seekDragging = false;
+let seekTicker = setInterval(()=>{
+  if(!activePlayback || seekDragging) return;
+  const elapsed = activePlayback.offset + (currentMode==='midi' ? (performance.now()-activePlayback.startPerf)/1000 : Tone.Transport.seconds);
+  const frac = Math.max(0, Math.min(1, elapsed/activePlayback.totalSeconds));
+  document.getElementById('seekBar').value = Math.round(frac*1000);
+  document.getElementById('seekTime').textContent = fmtTime(elapsed)+' / '+fmtTime(activePlayback.totalSeconds);
+}, 200);
+
+document.getElementById('seekBar').addEventListener('pointerdown', ()=> seekDragging=true);
+document.getElementById('seekBar').addEventListener('change', (e)=>{
+  seekDragging = false;
+  if(!activePlayback) return;
+  const target = (e.target.value/1000) * activePlayback.totalSeconds;
+  seekTo(target);
+});
+
+function seekTo(target){
+  if(!activePlayback) return;
+  engineStopSoundOnly();
+  const trimmed = activePlayback.notes.filter(n=>n.time>=target).map(n=>({...n, time:n.time-target}));
+  const mode = engineSchedule(trimmed);
+  currentMode = mode;
+  activePlayback.offset = target;
+  activePlayback.startPerf = performance.now();
+  if(stopTimer) clearTimeout(stopTimer);
+  const remain = Math.max(0, activePlayback.totalSeconds - target);
+  stopTimer = setTimeout(()=>{ if(activePlayback && playingButton===activePlayback.button) stopPlayback(); }, remain*1000 + 250);
+}
+
+function beginPlayingUI(button, totalSeconds){
+  button.dataset.label = button.textContent;
+  button.textContent = '■ 停止';
+  playingButton = button;
+  stopTimer = setTimeout(()=>{ if(playingButton===button) stopPlayback(); }, totalSeconds*1000 + 250);
+}
+
+// Schedules `notes` (each {midi,time,duration,chan,program,vel,chGain}, time in seconds from "now")
+// via whichever engine is active. Returns the mode used. Does not touch UI/timer bookkeeping.
+function engineSchedule(notes){
+  if(midiOutput){
+    const now = performance.now();
+    const progByChan = {}, gainByChan = {};
+    notes.forEach(n=>{ const ch=n.chan===undefined?0:n.chan; if(progByChan[ch]===undefined) progByChan[ch] = n.program||0; if(gainByChan[ch]===undefined) gainByChan[ch] = n.chGain!==undefined?n.chGain:1; });
+    Object.keys(progByChan).forEach(ch=>{ if(Number(ch)!==9) midiOutput.send([0xC0|Number(ch), progByChan[ch]]); });
+    Object.keys(gainByChan).forEach(ch=>{ midiOutput.send([0xB0|Number(ch), 7, Math.max(1,Math.min(127,Math.round(gainByChan[ch]*127)))]); });
+    notes.forEach(n=>{
+      const chan = n.chan===undefined ? 0 : n.chan;
+      const dur = Math.max(n.duration, 0.05);
+      const vel = Math.max(1, Math.round((n.vel||0.8)*127));
+      midiTimeouts.push(setTimeout(()=>{ try{ midiOutput && midiOutput.send([0x90|chan, n.midi, vel]); }catch(e){} }, n.time*1000));
+      midiTimeouts.push(setTimeout(()=>{ try{ midiOutput && midiOutput.send([0x80|chan, n.midi, 0]); }catch(e){} }, (n.time+dur)*1000));
+    });
+    if(activePlayback) activePlayback.startPerf = now;
+    return 'midi';
+  }
+  if(sf2){
+    ensureSf2Master();
+    Tone.Transport.stop();
+    Tone.Transport.cancel(0);
+    sf2ActiveSources = [];
+    notes.forEach(n=> Tone.Transport.scheduleOnce(time=> sf2TriggerNote(n, time), n.time));
+    Tone.Transport.start();
+    return 'sf2';
+  }
+  ensureVoices();
+  Tone.Transport.stop();
+  Tone.Transport.cancel(0);
+  notes.forEach(n=> Tone.Transport.scheduleOnce(time=> triggerNote(n, time), n.time));
+  Tone.Transport.start();
+  return 'tone';
+}
+
+function engineStopSoundOnly(){
+  Tone.Transport.stop();
+  Tone.Transport.cancel(0);
+  stopMidiOutput();
+  stopSf2Sources();
+  if(synth) synth.triggerRelease();
+  [voicePluck, voiceBass, voicePad, voiceLead].forEach(v=> v && v.releaseAll());
+}
+
+function stopPlayback(){
+  engineStopSoundOnly();
+  if(stopTimer){ clearTimeout(stopTimer); stopTimer = null; }
+  if(playingButton){ playingButton.textContent = playingButton.dataset.label; playingButton = null; }
+  currentMode = null;
+  activePlayback = null;
+  hideSeekBar();
+}
+
+async function playNotes(notes, button, totalSeconds, label){
+  if(playingButton === button){ stopPlayback(); return; }
+  if(playingButton) stopPlayback();
+  await Tone.start();
+  activePlayback = {notes, button, totalSeconds, offset:0, startPerf:performance.now()};
+  currentMode = engineSchedule(notes);
+  beginPlayingUI(button, totalSeconds);
+  showSeekBar(label, totalSeconds);
+}
+
+async function playSeq(midis, button){
+  const bpm = parseInt(document.getElementById('tempo').value,10);
+  const step = 60/bpm;
+  const notes = midis.map((m,i)=>({midi:m, time:i*step, duration:step*0.85, chan:0, program:0, vel:0.8, chGain:1}));
+  await playNotes(notes, button, midis.length*step, 'メロディ');
+}
+
+// --- minimal Standard MIDI File parser ---
+function parseSMF(buf){
+  const view = new DataView(buf);
+  let p = 0;
+  const u8 = () => view.getUint8(p++);
+  const u16 = () => { const v = view.getUint16(p); p += 2; return v; };
+  const u32 = () => { const v = view.getUint32(p); p += 4; return v; };
+  const str = n => { let s=''; for(let i=0;i<n;i++) s += String.fromCharCode(u8()); return s; };
+  const vlq = () => { let v=0,b; do{ b=u8(); v=(v<<7)|(b&0x7f);}while(b&0x80); return v; };
+
+  if(str(4) !== 'MThd') throw new Error('MThdヘッダーが見つかりません');
+  u32();
+  u16(); // format
+  const numTracks = u16();
+  const division = u16();
+  if(division & 0x8000) throw new Error('SMPTEタイムコードのMIDIには対応していません');
+  const tpq = division;
+
+  let tempo = 500000; // default 120bpm, µs/quarter
+  const rawEvents = []; // {tick, kind:'on'|'off'|'pc', note, chan, vel, program}
+  for(let t=0; t<numTracks; t++){
+    if(str(4) !== 'MTrk') throw new Error('MTrkチャンクが見つかりません');
+    const len = u32();
+    const end = p + len;
+    let tick = 0, running = 0;
+    while(p < end){
+      tick += vlq();
+      let status = u8();
+      if(status < 0x80){ p--; status = running; } else if(status < 0xF0){ running = status; }
+      const type = status & 0xF0;
+      const chan = status & 0x0F;
+      if(status === 0xFF){
+        const metaType = u8(); const mlen = vlq();
+        if(metaType === 0x51 && mlen === 3){ tempo = (u8()<<16)|(u8()<<8)|u8(); }
+        else p += mlen;
+      } else if(status === 0xF0 || status === 0xF7){
+        const slen = vlq(); p += slen;
+      } else if(type === 0x90){
+        const note = u8(), vel = u8();
+        rawEvents.push({tick, kind: vel>0?'on':'off', note, chan, vel});
+      } else if(type === 0x80){
+        const note = u8(); u8();
+        rawEvents.push({tick, kind:'off', note, chan});
+      } else if(type === 0xC0){
+        const program = u8();
+        rawEvents.push({tick, kind:'pc', chan, program});
+      } else if(type === 0xB0){
+        const controller = u8(), value = u8();
+        if(controller === 7 || controller === 11) rawEvents.push({tick, kind:'cc', chan, controller, value});
+      } else if(type === 0xA0 || type === 0xE0){
+        u8(); u8();
+      } else if(type === 0xD0){
+        u8();
+      }
+    }
+    p = end;
+  }
+  const secPerTick = (tempo/1e6) / tpq;
+  rawEvents.sort((a,b)=>a.tick-b.tick);
+  const active = {}; // "chan_note" -> {tick, vel, program}
+  const currentProgram = new Array(16).fill(0);
+  const currentVolume = new Array(16).fill(100); // GM default channel volume
+  const currentExpression = new Array(16).fill(127); // GM default expression (full)
+  const notes = [];
+  for(const ev of rawEvents){
+    if(ev.kind === 'pc'){ currentProgram[ev.chan] = ev.program; continue; }
+    if(ev.kind === 'cc'){
+      if(ev.controller === 7) currentVolume[ev.chan] = ev.value;
+      else if(ev.controller === 11) currentExpression[ev.chan] = ev.value;
+      continue;
+    }
+    const key = ev.chan + '_' + ev.note;
+    if(ev.kind === 'on'){
+      active[key] = {tick: ev.tick, vel: ev.vel, program: currentProgram[ev.chan], chGain: (currentVolume[ev.chan]/127) * (currentExpression[ev.chan]/127)};
+    } else if(active[key] !== undefined){
+      const a = active[key];
+      delete active[key];
+      const dur = Math.max(1, ev.tick - a.tick) * secPerTick;
+      notes.push({midi: ev.note, time: a.tick*secPerTick, duration: dur, chan: ev.chan, vel: a.vel/127, program: a.program, chGain: a.chGain});
+    }
+  }
+  notes.sort((a,b)=>a.time-b.time);
+  return notes;
+}
+
+let midiOrig = [], midiConv = [];
+let midiBaseName = '';
+
+function renderMidiNotes(el, notes, compareTo){
+  el.innerHTML = '';
+  const shown = notes.slice(0, 80);
+  shown.forEach((n,i)=>{
+    const s = document.createElement('span');
+    s.className = 'n' + (compareTo && compareTo[i] !== n.midi ? ' changed' : '');
+    s.textContent = midiToName(n.midi);
+    el.appendChild(s);
+  });
+  if(notes.length > 80){ const s=document.createElement('span'); s.className='n'; s.textContent=`…他${notes.length-80}音`; el.appendChild(s); }
+}
+
+// --- SoundFont (.sf2) engine: parses RIFF/SF2, resolves preset->instrument->sample, plays real samples ---
+let sf2 = null, sf2Buffers = {}, sf2ActiveSources = [], sf2MasterGain = null;
+
+function parseSF2(buf){
+  const view = new DataView(buf);
+  let p = 0;
+  const u8 = () => view.getUint8(p++);
+  const i8 = () => view.getInt8(p++);
+  const u16 = () => { const v=view.getUint16(p,true); p+=2; return v; };
+  const i16 = () => { const v=view.getInt16(p,true); p+=2; return v; };
+  const u32 = () => { const v=view.getUint32(p,true); p+=4; return v; };
+  const fourcc = () => { let s=''; for(let i=0;i<4;i++) s+=String.fromCharCode(u8()); return s; };
+  const str20 = () => { let s=''; let ended=false; for(let i=0;i<20;i++){ const c=u8(); if(c===0) ended=true; if(!ended) s+=String.fromCharCode(c);} return s; };
+  const readGen = () => { const oper=u16(); const lo=u8(), hi=u8(); p-=2; const amt=i16(); return {oper, lo, hi, amt}; };
+  const readBag = () => ({genNdx:u16(), modNdx:u16()});
+
+  if(fourcc() !== 'RIFF') throw new Error('RIFFヘッダーが見つかりません(.sf2ではない可能性があります)');
+  const riffSize = u32();
+  const riffEnd = p + riffSize;
+  if(fourcc() !== 'sfbk') throw new Error('sfbkチャンクが見つかりません');
+
+  let smplData = null;
+  const phdr=[], pbag=[], pgen=[], inst=[], ibag=[], igen=[], shdr=[];
+  while(p < riffEnd){
+    const id = fourcc(); const size = u32(); const end = p+size;
+    if(id === 'LIST'){
+      const listType = fourcc();
+      while(p < end){
+        const id2 = fourcc(); const size2 = u32(); const end2 = p+size2;
+        if(listType === 'sdta' && id2 === 'smpl'){
+          smplData = new Int16Array(buf.slice(p, p+size2));
+        } else if(listType === 'pdta'){
+          if(id2==='phdr'){ const n=size2/38; for(let i=0;i<n;i++){ const name=str20(); const preset=u16(); const bank=u16(); const bagNdx=u16(); u32();u32();u32(); phdr.push({name,preset,bank,bagNdx}); } }
+          else if(id2==='pbag'){ const n=size2/4; for(let i=0;i<n;i++) pbag.push(readBag()); }
+          else if(id2==='pgen'){ const n=size2/4; for(let i=0;i<n;i++) pgen.push(readGen()); }
+          else if(id2==='inst'){ const n=size2/22; for(let i=0;i<n;i++){ const name=str20(); const bagNdx=u16(); inst.push({name,bagNdx}); } }
+          else if(id2==='ibag'){ const n=size2/4; for(let i=0;i<n;i++) ibag.push(readBag()); }
+          else if(id2==='igen'){ const n=size2/4; for(let i=0;i<n;i++) igen.push(readGen()); }
+          else if(id2==='shdr'){ const n=size2/46; for(let i=0;i<n;i++){ const name=str20(); const start=u32(),end_=u32(),startloop=u32(),endloop=u32(),rate=u32(); const pitch=u8(); const corr=i8(); const link=u16(); const type=u16(); shdr.push({name,start,end:end_,startloop,endloop,rate,pitch,corr,link,type}); } }
+        }
+        p = end2 + (size2 % 2);
+      }
+    }
+    p = end + (size % 2);
+  }
+  if(!smplData || phdr.length<2 || shdr.length<2) throw new Error('SoundFontとして解釈できませんでした');
+  return {phdr,pbag,pgen,inst,ibag,igen,shdr,smplData};
+}
+
+function sf2BuildZones(headers, bags, gens){
+  const out = [];
+  for(let i=0;i<headers.length-1;i++){
+    const bagStart = headers[i].bagNdx, bagEnd = headers[i+1].bagNdx;
+    const zones = [];
+    for(let b=bagStart;b<bagEnd;b++){
+      zones.push(gens.slice(bags[b].genNdx, bags[b+1].genNdx));
+    }
+    out.push(zones);
+  }
+  return out;
+}
+function sf2GenMap(zoneGens){ const m={}; for(const g of zoneGens) m[g.oper]=g; return m; }
+
+function sf2FindPreset(bank, program){
+  for(let i=0;i<sf2.phdr.length-1;i++) if(sf2.phdr[i].bank===bank && sf2.phdr[i].preset===program) return i;
+  for(let i=0;i<sf2.phdr.length-1;i++) if(sf2.phdr[i].preset===program) return i;
+  return sf2.phdr.length>1 ? 0 : null;
+}
+
+function sf2ResolveNote(bank, program, note, vel){
+  const presetIdx = sf2FindPreset(bank, program);
+  if(presetIdx===null) return [];
+  const presetMatches = [];
+  for(const z of sf2.presetZones[presetIdx]){
+    const gm = sf2GenMap(z);
+    if(gm[41]===undefined) continue;
+    const kr=gm[43], vr=gm[44];
+    if((!kr || (note>=kr.lo&&note<=kr.hi)) && (!vr || (vel>=vr.lo&&vel<=vr.hi))) presetMatches.push({presetGM: gm, instIdx: gm[41].amt});
+  }
+  const results = [];
+  for(const pm of presetMatches){
+    for(const z of sf2.instZones[pm.instIdx]){
+      const gm = sf2GenMap(z);
+      if(gm[53]===undefined) continue;
+      const kr=gm[43], vr=gm[44];
+      if((!kr || (note>=kr.lo&&note<=kr.hi)) && (!vr || (vel>=vr.lo&&vel<=vr.hi))){
+        const sampleIdx = gm[53].amt;
+        const shdr = sf2.shdr[sampleIdx];
+        const rootKey = gm[58]!==undefined ? gm[58].amt : shdr.pitch;
+        const sampleModes = gm[54]!==undefined ? gm[54].amt : 0;
+        results.push({shdr, rootKey, sampleIdx, instGM:gm, presetGM:pm.presetGM, sampleModes});
+      }
+    }
+  }
+  return results;
+}
+
+function sf2GetBuffer(sampleIdx){
+  if(sf2Buffers[sampleIdx]) return sf2Buffers[sampleIdx];
+  const shdr = sf2.shdr[sampleIdx];
+  const pcm = sf2.smplData.subarray(shdr.start, shdr.end);
+  const ctx = Tone.getContext().rawContext;
+  const ab = ctx.createBuffer(1, Math.max(1,pcm.length), shdr.rate);
+  const chan = ab.getChannelData(0);
+  for(let i=0;i<pcm.length;i++) chan[i] = pcm[i]/32768;
+  const info = { audioBuffer:ab, loopStart:Math.max(0,(shdr.startloop-shdr.start))/shdr.rate, loopEnd:Math.max(0,(shdr.endloop-shdr.start))/shdr.rate };
+  sf2Buffers[sampleIdx] = info;
+  return info;
+}
+
+function sf2Tc2sec(genEntry, def){
+  if(!genEntry) return def;
+  if(genEntry.amt <= -12000) return 0;
+  return Math.pow(2, genEntry.amt/1200);
+}
+
+function ensureSf2Master(){
+  if(sf2MasterGain) return;
+  const ctx = Tone.getContext().rawContext;
+  sf2MasterGain = ctx.createGain();
+  sf2MasterGain.gain.value = 0.8;
+  sf2MasterGain.connect(ctx.destination);
+}
+
+function sf2TriggerNote(n, time){
+  const bank = n.chan===9 ? 128 : 0;
+  const program = n.chan===9 ? 0 : (n.program||0);
+  const vel127 = Math.max(1, Math.round((n.vel!==undefined?n.vel:0.8)*127));
+  const layers = sf2ResolveNote(bank, program, n.midi, vel127);
+  layers.forEach(layer => sf2PlayLayer(layer, n, time));
+}
+
+function sf2PlayLayer(resolved, n, time, ctx, destination, track, pannerCache){
+  ctx = ctx || Tone.getContext().rawContext;
+  destination = destination || sf2MasterGain;
+  track = track !== false;
+  const {shdr, rootKey, sampleIdx, instGM, presetGM, sampleModes} = resolved;
+  const bufInfo = sf2GetBuffer(sampleIdx);
+  const src = ctx.createBufferSource();
+  src.buffer = bufInfo.audioBuffer;
+  const coarse = (instGM[51]?instGM[51].amt:0) + (presetGM[51]?presetGM[51].amt:0);
+  const fine = (instGM[52]?instGM[52].amt:0) + (presetGM[52]?presetGM[52].amt:0) + (shdr.corr||0);
+  const cents = (n.midi - rootKey)*100 + coarse*100 + fine;
+  src.playbackRate.value = Math.pow(2, cents/1200);
+  if(sampleModes===1 || sampleModes===3){ src.loop=true; src.loopStart=bufInfo.loopStart; src.loopEnd=bufInfo.loopEnd; }
+  const attenCb = (instGM[48]?instGM[48].amt:0) + (presetGM[48]?presetGM[48].amt:0);
+  const attenGain = Math.pow(10, -attenCb/200);
+  const vel = Math.max(0.05, n.vel!==undefined?n.vel:0.8) * (n.chGain!==undefined?n.chGain:1);
+  const peak = Math.min(1, attenGain) * vel * 0.85;
+  if(peak < 0.0005) return;
+  const attack = sf2Tc2sec(instGM[34]||presetGM[34], 0.005);
+  const decay = sf2Tc2sec(instGM[36]||presetGM[36], 0.05);
+  const sustainCb = instGM[37]?instGM[37].amt : (presetGM[37]?presetGM[37].amt:0);
+  const sustainGain = Math.max(0, Math.min(1, Math.pow(10, -sustainCb/200)));
+  const release = Math.max(0.03, sf2Tc2sec(instGM[38]||presetGM[38], 0.15));
+  const dur = Math.max(n.duration, 0.05);
+  const endTime = time + dur;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, time);
+  g.gain.linearRampToValueAtTime(Math.max(0.0001,peak), time+attack);
+  g.gain.linearRampToValueAtTime(Math.max(0.0001,peak*sustainGain), time+attack+decay);
+  if(g.gain.cancelAndHoldAtTime){
+    g.gain.cancelAndHoldAtTime(endTime);
+  } else {
+    g.gain.cancelScheduledValues(endTime);
+    g.gain.setValueAtTime(endTime < time+attack+decay ? Math.max(0.0001,peak) : Math.max(0.0001,peak*sustainGain), endTime);
+  }
+  g.gain.linearRampToValueAtTime(0.0001, endTime+release);
+  const panAmt = (instGM[17]?instGM[17].amt:(presetGM[17]?presetGM[17].amt:0))/500;
+  src.connect(g);
+  if(ctx.createStereoPanner){
+    const pv = Math.round(Math.max(-1,Math.min(1,panAmt))*100)/100;
+    let pn = pannerCache && pannerCache.get(pv);
+    if(!pn){ pn = ctx.createStereoPanner(); pn.pan.value = pv; pn.connect(destination); if(pannerCache) pannerCache.set(pv, pn); }
+    g.connect(pn);
+  } else g.connect(destination);
+  try{ src.start(time); src.stop(endTime+release+0.05); }catch(e){}
+  if(track) sf2ActiveSources.push(src);
+}
+
+function stopSf2Sources(){
+  sf2ActiveSources.forEach(s=>{ try{ s.stop(); }catch(e){} });
+  sf2ActiveSources = [];
+}
+
+document.getElementById('sf2File').addEventListener('change', async (e)=>{
+  const file = e.target.files[0];
+  const status = document.getElementById('sf2Status');
+  const clearBtn = document.getElementById('sf2Clear');
+  if(!file) return;
+  status.textContent = '読み込み中…';
+  try{
+    const buf = await file.arrayBuffer();
+    const parsed = parseSF2(buf);
+    parsed.presetZones = sf2BuildZones(parsed.phdr, parsed.pbag, parsed.pgen);
+    parsed.instZones = sf2BuildZones(parsed.inst, parsed.ibag, parsed.igen);
+    sf2 = parsed; sf2Buffers = {};
+    status.textContent = `「${file.name}」を読み込みました（プリセット${sf2.phdr.length-1}個、サンプル${sf2.shdr.length-1}個）。以後の再生でこの音源を使います。`;
+    clearBtn.style.display = 'inline-block';
+  }catch(err){
+    status.textContent = '読み込みに失敗しました: ' + err.message;
+    sf2 = null;
+  }
+});
+document.getElementById('sf2Clear').addEventListener('click', ()=>{
+  if(playingButton) stopPlayback();
+  sf2 = null; sf2Buffers = {};
+  document.getElementById('sf2File').value = '';
+  document.getElementById('sf2Clear').style.display = 'none';
+  document.getElementById('sf2Status').textContent = 'サウンドフォントの設定を解除しました。以後はブラウザ内蔵シンセ(またはMIDI出力デバイス)で再生します。';
+});
+
+let voicePluck, voiceBass, voicePad, voiceLead, kickSynth, snareNoise, hihatNoise, masterBus;
+
+function ensureVoices(){
+  if(masterBus) return;
+  masterBus = new Tone.Limiter(-6).toDestination();
+  voicePluck = new Tone.PolySynth(Tone.Synth, {oscillator:{type:'triangle'}, envelope:{attack:0.004,decay:0.22,sustain:0.05,release:0.25}}).connect(masterBus);
+  voiceBass  = new Tone.PolySynth(Tone.Synth, {oscillator:{type:'sine'}, envelope:{attack:0.01,decay:0.2,sustain:0.5,release:0.3}}).connect(masterBus);
+  voicePad   = new Tone.PolySynth(Tone.Synth, {oscillator:{type:'sine'}, envelope:{attack:0.25,decay:0.3,sustain:0.7,release:0.9}}).connect(masterBus);
+  voiceLead  = new Tone.PolySynth(Tone.Synth, {oscillator:{type:'sawtooth'}, envelope:{attack:0.02,decay:0.12,sustain:0.55,release:0.2}}).connect(masterBus);
+  kickSynth  = new Tone.MembraneSynth({octaves:4, pitchDecay:0.05}).connect(masterBus);
+  snareNoise = new Tone.NoiseSynth({noise:{type:'white'}, envelope:{attack:0.001,decay:0.15,sustain:0}}).connect(masterBus);
+  hihatNoise = new Tone.NoiseSynth({noise:{type:'white'}, envelope:{attack:0.001,decay:0.05,sustain:0}}).connect(masterBus);
+}
+
+function melodicVoice(program){
+  if(program >= 32 && program <= 39) return voiceBass;
+  if(program >= 40 && program <= 55) return voicePad;
+  if((program >= 56 && program <= 71) || (program >= 80 && program <= 95)) return voiceLead;
+  if(program >= 96 && program <= 103) return voicePad;
+  return voicePluck;
+}
+
+function triggerNote(n, time){
+  const vel = Math.max(0.2, (n.vel || 0.8) * (n.chGain!==undefined?n.chGain:1));
+  if(n.chan === 9){
+    const note = n.midi;
+    if(note===35||note===36) kickSynth.triggerAttackRelease('C1', Math.max(n.duration,0.18), time, vel);
+    else if(note>=37 && note<=40) snareNoise.triggerAttackRelease(Math.max(n.duration*0.6,0.12), time, vel);
+    else if(note===41||note===43||note===45||note===47||note===48||note===50) kickSynth.triggerAttackRelease(Tone.Frequency(note,'midi').toFrequency(), Math.max(n.duration,0.14), time, vel);
+    else hihatNoise.triggerAttackRelease(Math.max(n.duration*0.4,0.045), time, vel);
+  } else {
+    const voice = melodicVoice(n.program || 0);
+    voice.triggerAttackRelease(Tone.Frequency(n.midi,'midi').toFrequency(), Math.max(0.08, n.duration*0.92), time, vel);
+  }
+}
+
+async function playMidiNotes(notes, button){
+  let maxEnd = 0;
+  notes.forEach(n=>{ maxEnd = Math.max(maxEnd, n.time + Math.max(n.duration,0.15)); });
+  await playNotes(notes, button, maxEnd, 'MIDIファイル');
+}
+
+function convertNotesToRyukyu(notes, rootPc){
+  return notes.map(n => n.chan === 9 ? n : ({...n, midi: nearestRyukyu(n.midi, rootPc)}));
+}
+
+document.getElementById('midiFile').addEventListener('change', async (e)=>{
+  const file = e.target.files[0];
+  const status = document.getElementById('midiStatus');
+  const controls = document.getElementById('midiControls');
+  if(!file) return;
+  try{
+    midiBaseName = file.name.replace(/\.[^.]+$/,'').replace(/[\\/:*?"<>|]/g,'_') || 'output';
+    const buf = await file.arrayBuffer();
+    const notes = parseSMF(buf);
+    if(notes.length === 0){ status.textContent = 'ノートイベントが見つかりませんでした。'; controls.style.display='none'; return; }
+    const rootPc = PC[document.getElementById('root').value];
+    midiOrig = notes;
+    midiConv = convertNotesToRyukyu(notes, rootPc);
+    const dur = notes[notes.length-1].time + notes[notes.length-1].duration;
+    document.getElementById('midiSummary').textContent = `元のメロディ（${notes.length}音・約${dur.toFixed(1)}秒）`;
+    renderMidiNotes(document.getElementById('midiOrigNotes'), midiOrig, null);
+    renderMidiNotes(document.getElementById('midiConvNotes'), midiConv, midiOrig.map(n=>n.midi));
+    status.textContent = `「${file.name}」を解析しました。`;
+    controls.style.display = 'block';
+  }catch(err){
+    status.textContent = '解析に失敗しました: ' + err.message;
+    controls.style.display = 'none';
+  }
+});
+document.getElementById('midiPlayOrig').addEventListener('click', (e)=> midiOrig.length && playMidiNotes(midiOrig, e.currentTarget));
+document.getElementById('midiPlayConv').addEventListener('click', (e)=> midiConv.length && playMidiNotes(midiConv, e.currentTarget));
+document.getElementById('root').addEventListener('change', ()=>{
+  if(playingButton) stopPlayback();
+  const rootPc = PC[document.getElementById('root').value];
+  if(midiOrig.length){
+    midiConv = convertNotesToRyukyu(midiOrig, rootPc);
+    renderMidiNotes(document.getElementById('midiConvNotes'), midiConv, midiOrig.map(n=>n.midi));
+  }
+  if(origMidis.length){
+    convMidis = origMidis.map(m => nearestRyukyu(m, rootPc));
+    const convEl = document.getElementById('convNotes');
+    convEl.innerHTML = '';
+    convMidis.forEach((conv,i)=>{
+      const c = document.createElement('span'); c.className='n'+(conv!==origMidis[i]?' changed':''); c.textContent = midiToName(conv); convEl.appendChild(c);
+    });
+  }
+});
+
+// --- Export: build a Standard MIDI File from a note-object array ---
+function vlqBytes(value){
+  let bytes = [value & 0x7f];
+  value = Math.floor(value/128);
+  while(value > 0){ bytes.unshift((value&0x7f)|0x80); value = Math.floor(value/128); }
+  return bytes;
+}
+function buildSMF(notes){
+  const tpq = 480, tempo = 500000; // 120bpm
+  const ticksPerSec = tpq / (tempo/1e6);
+  const events = [];
+  const progByChan = {}, gainByChan = {};
+  notes.forEach(n=>{ const ch=n.chan===undefined?0:n.chan; if(progByChan[ch]===undefined) progByChan[ch]=n.program||0; if(gainByChan[ch]===undefined) gainByChan[ch]=n.chGain!==undefined?n.chGain:1; });
+  Object.keys(progByChan).forEach(ch=>{ if(Number(ch)!==9) events.push({tick:0, bytes:[0xC0|Number(ch), progByChan[ch]]}); });
+  Object.keys(gainByChan).forEach(ch=>{ events.push({tick:0, bytes:[0xB0|Number(ch), 7, Math.max(1,Math.min(127,Math.round(gainByChan[ch]*127)))]}); });
+  let maxTick = 0;
+  notes.forEach(n=>{
+    const ch = n.chan===undefined?0:n.chan;
+    const onTick = Math.round(n.time*ticksPerSec);
+    const offTick = Math.round((n.time+Math.max(n.duration,0.05))*ticksPerSec);
+    const vel = Math.max(1, Math.round((n.vel!==undefined?n.vel:0.8)*127));
+    events.push({tick:onTick, bytes:[0x90|ch, n.midi, vel]});
+    events.push({tick:offTick, bytes:[0x80|ch, n.midi, 0]});
+    maxTick = Math.max(maxTick, offTick);
+  });
+  events.sort((a,b)=>a.tick-b.tick);
+  const trackBytes = [];
+  trackBytes.push(0x00, 0xFF, 0x51, 0x03, (tempo>>16)&0xff, (tempo>>8)&0xff, tempo&0xff);
+  let lastTick = 0;
+  events.forEach(ev=>{
+    trackBytes.push(...vlqBytes(ev.tick-lastTick));
+    trackBytes.push(...ev.bytes);
+    lastTick = ev.tick;
+  });
+  trackBytes.push(...vlqBytes(Math.max(0,maxTick-lastTick)), 0xFF, 0x2F, 0x00);
+  const trackLen = trackBytes.length;
+  const header = [0x4D,0x54,0x68,0x64, 0,0,0,6, 0,0, 0,1, (tpq>>8)&0xff, tpq&0xff];
+  const trackHeader = [0x4D,0x54,0x72,0x6B, (trackLen>>>24)&0xff,(trackLen>>>16)&0xff,(trackLen>>>8)&0xff,trackLen&0xff];
+  const out = new Uint8Array(header.length + trackHeader.length + trackBytes.length);
+  out.set(header, 0); out.set(trackHeader, header.length); out.set(trackBytes, header.length + trackHeader.length);
+  return out;
+}
+
+// --- Minimal ZIP writer (stored/uncompressed, single entry) ---
+const CRC_TABLE = (()=>{ const t=new Uint32Array(256); for(let n=0;n<256;n++){ let c=n; for(let k=0;k<8;k++) c = (c&1)?(0xEDB88320^(c>>>1)):(c>>>1); t[n]=c>>>0; } return t; })();
+function crc32(bytes){ let c=0xFFFFFFFF; for(let i=0;i<bytes.length;i++) c = CRC_TABLE[(c^bytes[i])&0xFF] ^ (c>>>8); return (c^0xFFFFFFFF)>>>0; }
+function makeZip(filename, data){
+  const nameBytes = new TextEncoder().encode(filename);
+  const crc = crc32(data);
+  const size = data.length;
+  const localHeader = new Uint8Array(30+nameBytes.length);
+  const lv = new DataView(localHeader.buffer);
+  lv.setUint32(0,0x04034b50,true); lv.setUint16(4,20,true); lv.setUint16(6,0,true); lv.setUint16(8,0,true);
+  lv.setUint16(10,0,true); lv.setUint16(12,0,true); lv.setUint32(14,crc,true); lv.setUint32(18,size,true); lv.setUint32(22,size,true);
+  lv.setUint16(26,nameBytes.length,true); lv.setUint16(28,0,true);
+  localHeader.set(nameBytes,30);
+  const centralHeader = new Uint8Array(46+nameBytes.length);
+  const cv = new DataView(centralHeader.buffer);
+  cv.setUint32(0,0x02014b50,true); cv.setUint16(4,20,true); cv.setUint16(6,20,true); cv.setUint16(8,0,true); cv.setUint16(10,0,true);
+  cv.setUint16(12,0,true); cv.setUint16(14,0,true); cv.setUint32(16,crc,true); cv.setUint32(20,size,true); cv.setUint32(24,size,true);
+  cv.setUint16(28,nameBytes.length,true); cv.setUint16(30,0,true); cv.setUint16(32,0,true); cv.setUint16(34,0,true); cv.setUint16(36,0,true);
+  cv.setUint32(38,0,true); cv.setUint32(42,0,true);
+  centralHeader.set(nameBytes,46);
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  ev.setUint32(0,0x06054b50,true); ev.setUint16(4,0,true); ev.setUint16(6,0,true); ev.setUint16(8,1,true); ev.setUint16(10,1,true);
+  ev.setUint32(12,centralHeader.length,true); ev.setUint32(16,localHeader.length+data.length,true); ev.setUint16(20,0,true);
+  const out = new Uint8Array(localHeader.length + data.length + centralHeader.length + eocd.length);
+  let o = 0;
+  out.set(localHeader, o); o += localHeader.length;
+  out.set(data, o); o += data.length;
+  out.set(centralHeader, o); o += centralHeader.length;
+  out.set(eocd, o);
+  return out;
+}
+
+async function saveOut(baseName, ext, bytes, mime){
+  const c = window.claude;
+  if(c && typeof c.use === 'function'){
+    try{
+      const dl = await c.use('downloads');
+      if(dl){
+        if(ext === 'webm'){
+          await dl.save({filename: baseName+'.'+ext, data: new Blob([bytes], {type: mime})});
+          return 'direct';
+        }
+        const zip = makeZip(baseName+'.'+ext, bytes);
+        await dl.save({filename: baseName+'_'+ext+'.zip', data: zip.buffer});
+        return 'zip';
+      }
+    }catch(err){ if(err && err.code==='declined') return 'declined'; throw err; }
+  }
+  const blob = new Blob([bytes], {type: mime});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = baseName+'.'+ext;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=> URL.revokeObjectURL(url), 15000);
+  return 'direct';
+}
+function savedMessage(mode, baseName, ext){
+  if(mode==='zip') return `保存しました（zip内に${baseName}.${ext}が入っています）。`;
+  if(mode==='declined') return '保存をキャンセルしました。';
+  return `保存しました（${baseName}.${ext}）。`;
+}
+
+async function exportMidi(notes, filenameBase, statusEl){
+  if(!notes || notes.length===0){ statusEl.textContent='変換結果がありません。先に変換してください。'; return; }
+  statusEl.textContent = '書き出し中…';
+  try{
+    const smf = buildSMF(notes);
+    const mode = await saveOut(filenameBase, 'mid', smf, 'audio/midi');
+    statusEl.textContent = savedMessage(mode, filenameBase, 'mid');
+  }catch(err){
+    statusEl.textContent = '保存に失敗しました: ' + (err.message||err.code||err);
+  }
+}
+
+async function exportAudio(notes, filenameBase, statusEl){
+  if(!notes || notes.length===0){ statusEl.textContent='変換結果がありません。先に変換してください。'; return; }
+  if(playingButton) stopPlayback();
+  let dest = null, srcNode = null;
+  try{
+    await Tone.start();
+    const ctx = Tone.getContext().rawContext;
+    dest = ctx.createMediaStreamDestination();
+    const usingSf2 = !!sf2;
+    if(usingSf2){ ensureSf2Master(); srcNode = sf2MasterGain; }
+    else { ensureVoices(); srcNode = masterBus; }
+    srcNode.connect(dest);
+    let sourceLabel = usingSf2 ? '読み込み済みのサウンドフォント' : 'ブラウザ内蔵シンセ';
+    if(midiOutput){
+      sourceLabel += `（MIDI出力デバイス「${midiOutput.name}」の音はブラウザから録音できないため使用できません。同じ.sf2を読み込むと近い音で書き出せます）`;
+    }
+    statusEl.textContent = `${sourceLabel}を使って書き出します…`;
+    await new Promise(r=> setTimeout(r, 30));
+    const recorder = new MediaRecorder(dest.stream);
+    const chunks = [];
+    recorder.ondataavailable = e=>{ if(e.data.size>0) chunks.push(e.data); };
+    const stopped = new Promise(res=> recorder.onstop = res);
+    let maxEnd = 0;
+    notes.forEach(n=>{ maxEnd = Math.max(maxEnd, n.time+Math.max(n.duration,0.15)); });
+    recorder.start();
+    Tone.Transport.stop(); Tone.Transport.cancel(0);
+    if(usingSf2) sf2ActiveSources = [];
+    notes.forEach(n=>{
+      Tone.Transport.scheduleOnce(time=> (usingSf2 ? sf2TriggerNote(n,time) : triggerNote(n,time)), n.time);
+    });
+    Tone.Transport.start();
+    const totalMs = maxEnd*1000 + 500;
+    const startedAt = performance.now();
+    const timer = setInterval(()=>{
+      const el = Math.min(totalMs, performance.now()-startedAt)/1000;
+      statusEl.textContent = `${sourceLabel}で録音中… ${el.toFixed(0)} / ${(totalMs/1000).toFixed(0)}秒`;
+    }, 500);
+    await new Promise(r=> setTimeout(r, totalMs));
+    clearInterval(timer);
+    Tone.Transport.stop(); Tone.Transport.cancel(0);
+    if(usingSf2) stopSf2Sources();
+    recorder.stop();
+    await stopped;
+    statusEl.textContent = '保存中…';
+    const blob = new Blob(chunks, {type: recorder.mimeType || 'audio/webm'});
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const mode = await saveOut(filenameBase, 'webm', bytes, 'audio/webm');
+    statusEl.textContent = `${savedMessage(mode, filenameBase, 'webm')}（音源: ${usingSf2?'サウンドフォント':'内蔵シンセ'}）`;
+  }catch(err){
+    statusEl.textContent = '書き出しに失敗しました: ' + (err.message||err.code||err);
+  }finally{
+    try{ if(srcNode && dest) srcNode.disconnect(dest); }catch(e){}
+  }
+}
+
+async function exportSystemAudio(notes, filenameBase, statusEl){
+  if(!notes || notes.length===0){ statusEl.textContent='変換結果がありません。先に変換してください。'; return; }
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia){
+    statusEl.textContent = 'このブラウザは画面共有によるシステム音声の録音に対応していません。'; return;
+  }
+  if(playingButton) stopPlayback();
+  let displayStream = null, recStream = null;
+  try{
+    statusEl.textContent = '画面共有の選択画面が開きます。「システム音声を共有」にチェックを入れて選んでください…';
+    displayStream = await navigator.mediaDevices.getDisplayMedia({video:true, audio:true});
+    const audioTracks = displayStream.getAudioTracks();
+    if(audioTracks.length === 0){
+      statusEl.textContent = 'システム音声が共有されませんでした（共有時に「システム音声を共有」のチェックが必要です）。';
+      displayStream.getTracks().forEach(t=>t.stop());
+      return;
+    }
+    recStream = new MediaStream(audioTracks);
+    await Tone.start();
+    let maxEnd = 0;
+    notes.forEach(n=>{ maxEnd = Math.max(maxEnd, n.time+Math.max(n.duration,0.15)); });
+    const recorder = new MediaRecorder(recStream);
+    const chunks = [];
+    recorder.ondataavailable = e=>{ if(e.data.size>0) chunks.push(e.data); };
+    const stopped = new Promise(res=> recorder.onstop = res);
+    recorder.start();
+    engineSchedule(notes);
+    const totalMs = maxEnd*1000 + 500;
+    const startedAt = performance.now();
+    const timer = setInterval(()=>{
+      const el = Math.min(totalMs, performance.now()-startedAt)/1000;
+      statusEl.textContent = `システム音声を録音中… ${el.toFixed(0)} / ${(totalMs/1000).toFixed(0)}秒（他の音を鳴らさないでください）`;
+    }, 500);
+    await new Promise(r=> setTimeout(r, totalMs));
+    clearInterval(timer);
+    engineStopSoundOnly();
+    recorder.stop();
+    await stopped;
+    displayStream.getTracks().forEach(t=>t.stop());
+    statusEl.textContent = '保存中…';
+    const blob = new Blob(chunks, {type: recorder.mimeType || 'audio/webm'});
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const mode = await saveOut(filenameBase, 'webm', bytes, 'audio/webm');
+    statusEl.textContent = `${savedMessage(mode, filenameBase, 'webm')}（音源: システム音声）`;
+  }catch(err){
+    if(displayStream) displayStream.getTracks().forEach(t=>t.stop());
+    statusEl.textContent = err && err.name==='NotAllowedError' ? '画面共有がキャンセルされました。' : '書き出しに失敗しました: ' + (err.message||err.code||err);
+  }
+}
+
+function toStepNotes(midis){
+  const step = 60/parseInt(document.getElementById('tempo').value,10);
+  return midis.map((m,i)=>({midi:m, time:i*step, duration:step*0.85, chan:0, program:0, vel:0.8, chGain:1}));
+}
+document.getElementById('exportMidiText').addEventListener('click', ()=> exportMidi(toStepNotes(convMidis), 'ryukyu_melody', document.getElementById('exportStatusText')));
+document.getElementById('exportAudioText').addEventListener('click', ()=> exportAudio(toStepNotes(convMidis), 'ryukyu_melody', document.getElementById('exportStatusText')));
+document.getElementById('exportMidiTextOrig').addEventListener('click', ()=> exportMidi(toStepNotes(origMidis), 'melody_original', document.getElementById('exportStatusTextOrig')));
+document.getElementById('exportAudioTextOrig').addEventListener('click', ()=> exportAudio(toStepNotes(origMidis), 'melody_original', document.getElementById('exportStatusTextOrig')));
+document.getElementById('exportMidiFileOrig').addEventListener('click', ()=> exportMidi(midiOrig, (midiBaseName||'output')+'_original', document.getElementById('exportStatusFileOrig')));
+document.getElementById('exportAudioFileOrig').addEventListener('click', ()=> exportAudio(midiOrig, (midiBaseName||'output')+'_original', document.getElementById('exportStatusFileOrig')));
+document.getElementById('exportMidiFile').addEventListener('click', ()=> exportMidi(midiConv, (midiBaseName||'output')+'_ryukyu', document.getElementById('exportStatusFile')));
+document.getElementById('exportAudioFile').addEventListener('click', ()=> exportAudio(midiConv, (midiBaseName||'output')+'_ryukyu', document.getElementById('exportStatusFile')));
+document.getElementById('exportSysText').addEventListener('click', ()=> exportSystemAudio(toStepNotes(convMidis), 'ryukyu_melody', document.getElementById('exportStatusText')));
+document.getElementById('exportSysTextOrig').addEventListener('click', ()=> exportSystemAudio(toStepNotes(origMidis), 'melody_original', document.getElementById('exportStatusTextOrig')));
+document.getElementById('exportSysFileOrig').addEventListener('click', ()=> exportSystemAudio(midiOrig, (midiBaseName||'output')+'_original', document.getElementById('exportStatusFileOrig')));
+document.getElementById('exportSysFile').addEventListener('click', ()=> exportSystemAudio(midiConv, (midiBaseName||'output')+'_ryukyu', document.getElementById('exportStatusFile')));
+
+document.getElementById('go').addEventListener('click', render);
+document.querySelectorAll('#result .play').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    if(origMidis.length===0){ if(!render()) return; }
+    playSeq(btn.dataset.which==='orig' ? origMidis : convMidis, btn);
+  });
+});
+render();
+</script>
+<footer class="site-footer">
+    本ツールの利用により生じたいかなる損害についても運営者は責任を負いません。処理はブラウザ内で完結し、ファイルはサーバーに送信されません。<br>
+    <a href="index.html#terms">利用規約はこちら</a> ／ <a href="index.html">トップページへ戻る</a>
+  </footer>
+</body>
+</html>

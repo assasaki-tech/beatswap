@@ -228,6 +228,11 @@ button.tap:hover{background:var(--amber);color:#1a1208;}
 }
 .seekbar-row input[type=range]:disabled{cursor:not-allowed;opacity:.4;}
 .time-label{font-size:12px;color:var(--text-dim);white-space:nowrap;min-width:92px;text-align:right;}
+.speed-row{display:flex;align-items:center;gap:8px;margin-top:12px;}
+.speed-label{font-size:10.5px;letter-spacing:1px;color:var(--text-dim);text-transform:uppercase;margin-right:4px;}
+button.speed-btn{padding:6px 12px;font-size:12px;}
+button.speed-btn.active{background:var(--amber-dim);border-color:var(--amber);color:#fff0e2;}
+button.speed-btn.active:hover{color:#fff0e2;border-color:var(--amber);}
 #status{
   font-size:11.5px;
   color:var(--text-dim);
@@ -236,6 +241,15 @@ button.tap:hover{background:var(--amber);color:#1a1208;}
 }
 #status.err{color:var(--red);}
 #status.ok{color:var(--teal);}
+.mini-footer{
+  font-size:10px;
+  color:var(--text-dim);
+  line-height:1.7;
+  padding:14px 24px 20px;
+  border-top:1px solid var(--panel-line);
+}
+.mini-footer a{color:var(--amber);}
+.speed-note{font-size:10.5px;color:var(--red);margin-top:8px;line-height:1.6;}
 </style>
 </head>
 <body>
@@ -321,9 +335,21 @@ button.tap:hover{background:var(--amber);color:#1a1208;}
       <input type="range" id="seekBar" min="0" max="1000" value="0" step="1" disabled>
       <span class="time-label" id="timeLabel">0:00 / 0:00</span>
     </div>
+    <div class="speed-row">
+      <span class="speed-label">曲の速さ（ピッチ維持）</span>
+      <button class="speed-btn active" data-speed="1" disabled>100%</button>
+      <button class="speed-btn" data-speed="0.75" disabled>75%</button>
+      <button class="speed-btn" data-speed="0.5" disabled>50%</button>
+    </div>
+    <div class="speed-note">※ テンポ変更機能はテスト中の機能です。動作が不安定になる場合や、音が歪む場合があります。</div>
   </section>
 
   <div id="status">ファイルを読み込んでください。</div>
+
+  <footer class="mini-footer">
+    本ツールの利用により生じたいかなる損害についても運営者は責任を負いません。処理はブラウザ内で完結し、ファイルはサーバーに送信されません。<br>
+    <a href="index.html#terms">利用規約はこちら</a>
+  </footer>
 </div>
 
 <script>
@@ -337,8 +363,11 @@ button.tap:hover{background:var(--amber);color:#1a1208;}
   let muted   = {1:false, 2:false, 3:false, 4:false};
   let playingNode = null;
   let playStartCtxTime = 0;
+  let speed = 1;
   let previewBuffer = null;
   let isPlaying = false;
+  let isRendering = false;
+  let renderToken = 0;
   let isSeeking = false;
   let manualStop = false;
   let lastPosition = 0;
@@ -365,6 +394,7 @@ button.tap:hover{background:var(--amber);color:#1a1208;}
   const stopBtn = el('stopBtn');
   const seekBar = el('seekBar');
   const timeLabel = el('timeLabel');
+  const speedBtns = document.querySelectorAll('.speed-btn');
   const exportBtn = el('exportBtn');
   const formatSelect = el('formatSelect');
   const downloadLink = el('downloadLink');
@@ -413,7 +443,7 @@ button.tap:hover{background:var(--amber);color:#1a1208;}
       fname.textContent = `${file.name} (${decoded.duration.toFixed(1)}秒 / ${decoded.sampleRate}Hz / ${decoded.numberOfChannels}ch)`;
       mapping = {1:1,2:2,3:3,4:4};
       muted = {1:false,2:false,3:false,4:false};
-      [tapBtn, tapResetBtn, autoDetectBtn, offsetAutoBtn, resetGridBtn, previewBtn, exportBtn].forEach(b => b.disabled = false);
+      [tapBtn, tapResetBtn, autoDetectBtn, offsetAutoBtn, resetGridBtn, previewBtn, exportBtn, ...speedBtns].forEach(b => b.disabled = false);
       downloadLink.style.display = 'none';
       buildPads();
       drawWaveform();
@@ -779,6 +809,175 @@ button.tap:hover{background:var(--amber);color:#1a1208;}
     return outBuffer;
   }
 
+  // WSOLA time-stretch: changes duration/tempo without changing pitch.
+  // speedFactor < 1 = slower (longer output), > 1 = faster (shorter output).
+  // Runs in small chunks (yielding to the event loop) so the page never freezes,
+  // and can be cancelled early via `token` if a newer request supersedes it.
+  function detectOnsetsRaw(sig, sr, minSpacingSec, thresholdMult){
+    const hopSize = Math.max(1, Math.round(sr*0.005));
+    const frameSize = Math.max(1, Math.round(sr*0.01));
+    const numFrames = Math.floor((sig.length-frameSize)/hopSize);
+    const energy = new Float32Array(numFrames);
+    for(let i=0;i<numFrames;i++){
+      let sum=0; const start=i*hopSize;
+      for(let j=0;j<frameSize;j++){ const s=sig[start+j]||0; sum+=s*s; }
+      energy[i]=Math.sqrt(sum/frameSize);
+    }
+    const onset = new Float32Array(numFrames);
+    for(let i=1;i<numFrames;i++){ const d=energy[i]-energy[i-1]; onset[i]=d>0?d:0; }
+    let mean=0; for(let i=0;i<numFrames;i++) mean+=onset[i]; mean/=numFrames || 1;
+    let variance=0; for(let i=0;i<numFrames;i++) variance+=(onset[i]-mean)**2; variance/=numFrames || 1;
+    const std=Math.sqrt(variance);
+    const threshold = mean + std*thresholdMult;
+    const minSpacingFrames = Math.round(minSpacingSec/(hopSize/sr));
+    const onsetFrames=[]; let lastOnsetFrame=-minSpacingFrames;
+    for(let i=1;i<numFrames-1;i++){
+      if(onset[i]>threshold && onset[i]>=onset[i-1] && onset[i]>=onset[i+1] && (i-lastOnsetFrame)>=minSpacingFrames){
+        onsetFrames.push(i); lastOnsetFrame=i;
+      }
+    }
+    return onsetFrames.map(f => f*hopSize);
+  }
+
+  // Detects transients across both a broadband pass (catches kicks / strong low-end hits)
+  // and a high-passed pass (catches hi-hats, cymbals, snare crack, and other quieter
+  // high-frequency transients that broadband energy alone tends to miss).
+  function detectTransientRegions(mono, sr, minSpacingSec, transientDurSec){
+    const lowOnsets = detectOnsetsRaw(mono, sr, minSpacingSec, 1.5);
+    const hp = new Float32Array(mono.length);
+    for(let i=1;i<mono.length;i++) hp[i] = mono[i]-mono[i-1]; // crude high-pass (first-order diff)
+    const highOnsets = detectOnsetsRaw(hp, sr, Math.max(0.03, minSpacingSec*0.5), 1.0);
+
+    const allStarts = Array.from(new Set([...lowOnsets, ...highOnsets])).sort((a,b)=>a-b);
+    const transientDurSamples = Math.round(transientDurSec*sr);
+    const merged = [];
+    for(const s of allStarts){
+      const e = Math.min(mono.length, s+transientDurSamples);
+      if(merged.length && s <= merged[merged.length-1][1]){
+        merged[merged.length-1][1] = Math.max(merged[merged.length-1][1], e);
+      }else{
+        merged.push([s, e]);
+      }
+    }
+    return merged;
+  }
+
+  // Core WSOLA stretch of a single sub-range, writing directly into shared output arrays.
+  function stretchSegmentInto(inData, segStart, segLen, speedFactor, outArrays, writePos, numCh){
+    if(segLen<=0) return 0;
+    const frameSize = Math.min(512, Math.max(32, segLen));
+    const synthesisHop = Math.max(1, Math.floor(frameSize/2));
+    const analysisHop = Math.max(1, Math.round(synthesisHop*speedFactor));
+    const searchRadius = Math.min(64, Math.floor(frameSize/4));
+    const overlapLen = frameSize-synthesisHop;
+    const outLen = Math.max(1, Math.ceil(segLen/speedFactor));
+    const ref = inData[0];
+    const window = new Float32Array(frameSize);
+    for(let i=0;i<frameSize;i++) window[i]=0.5-0.5*Math.cos(2*Math.PI*i/((frameSize-1)||1));
+    const padLen = outLen+frameSize;
+    const localAcc=[]; for(let ch=0;ch<numCh;ch++) localAcc.push(new Float32Array(padLen));
+    const localWeight = new Float32Array(padLen);
+    let synthesisPos=0, analysisPosIdeal=0, prevAnalysisPos=0, first=true;
+    while(synthesisPos<outLen && Math.round(analysisPosIdeal)<segLen){
+      let bestPos = Math.round(analysisPosIdeal);
+      if(!first){
+        const expected = Math.round(analysisPosIdeal); // anchor to the non-drifting ideal position
+        let bestScore=-Infinity;
+        const lo=Math.max(0,expected-searchRadius);
+        const hi=Math.min(Math.max(lo,segLen-frameSize-1), expected+searchRadius);
+        for(let cand=lo; cand<=hi; cand++){
+          let score=0;
+          const base=prevAnalysisPos+synthesisHop;
+          for(let k=0;k<overlapLen;k++) score += ref[segStart+base+k]*ref[segStart+cand+k];
+          if(score>bestScore){bestScore=score;bestPos=cand;}
+        }
+      }
+      for(let ch=0;ch<numCh;ch++){
+        const src=inData[ch]; const dst=localAcc[ch];
+        for(let k=0;k<frameSize;k++){
+          if(bestPos+k<0||bestPos+k>=segLen) continue;
+          dst[synthesisPos+k]+=src[segStart+bestPos+k]*window[k];
+        }
+      }
+      for(let k=0;k<frameSize;k++) localWeight[synthesisPos+k]+=window[k];
+      prevAnalysisPos=bestPos; synthesisPos+=synthesisHop; analysisPosIdeal+=analysisHop; first=false;
+    }
+    const actualLen = Math.min(outLen, padLen);
+    for(let ch=0; ch<numCh; ch++){
+      const dst=localAcc[ch]; const outArr=outArrays[ch];
+      for(let i=0;i<actualLen;i++){
+        const w=localWeight[i];
+        outArr[writePos+i] = w>1e-6 ? dst[i]/w : dst[i];
+      }
+    }
+    return actualLen;
+  }
+
+  // Transient-preserving time-stretch: detected drum-hit onsets are copied unmodified (crisp),
+  // and only the quieter gaps between them are stretched to reach the target duration.
+  async function timeStretchBuffer(buffer, speedFactor, token, onProgress){
+    if(speedFactor === 1) return buffer;
+    const sr = buffer.sampleRate;
+    const numCh = buffer.numberOfChannels;
+    const inLen = buffer.length;
+    const inData = [];
+    for(let ch=0; ch<numCh; ch++) inData.push(buffer.getChannelData(ch));
+    const mono = inData[0];
+
+    const regions = detectTransientRegions(mono, sr, 0.05, 0.035);
+    const segments = [];
+    let cursor = 0;
+    for(const [s,e] of regions){
+      if(s>cursor) segments.push({type:'gap', start:cursor, end:s});
+      segments.push({type:'transient', start:s, end:e});
+      cursor = e;
+    }
+    if(cursor<inLen) segments.push({type:'gap', start:cursor, end:inLen});
+
+    const transientTotal = segments.filter(s=>s.type==='transient').reduce((a,s)=>a+(s.end-s.start),0);
+    const gapTotalIn = inLen - transientTotal;
+    const targetOutLen = Math.max(1, Math.ceil(inLen/speedFactor));
+    let gapOutBudget = targetOutLen - transientTotal;
+    let gapSpeedFactor = speedFactor;
+    if(gapTotalIn > 0){
+      if(gapOutBudget <= 0) gapOutBudget = Math.max(1, Math.round(gapTotalIn/speedFactor));
+      gapSpeedFactor = gapTotalIn/gapOutBudget;
+      gapSpeedFactor = Math.max(0.15, Math.min(4, gapSpeedFactor));
+    }
+
+    const maxOutLen = Math.ceil(targetOutLen*1.1)+8192;
+    const outArrays = [];
+    for(let ch=0; ch<numCh; ch++) outArrays.push(new Float32Array(maxOutLen));
+    let writePos = 0;
+    let iterCount = 0;
+
+    for(const seg of segments){
+      if(token != null && token !== renderToken) return null; // superseded by a newer request
+      const segLen = seg.end-seg.start;
+      if(segLen<=0) continue;
+      if(seg.type === 'transient'){
+        for(let ch=0; ch<numCh; ch++) outArrays[ch].set(inData[ch].subarray(seg.start, seg.end), writePos);
+        writePos += segLen;
+      }else{
+        const written = stretchSegmentInto(inData, seg.start, segLen, gapSpeedFactor, outArrays, writePos, numCh);
+        writePos += written;
+      }
+      iterCount++;
+      if(iterCount % 8 === 0){
+        if(onProgress) onProgress(Math.min(1, writePos/targetOutLen));
+        await new Promise(r => setTimeout(r, 0)); // yield so clicks/stop() can be handled
+      }
+    }
+
+    if(token != null && token !== renderToken) return null;
+
+    const result = audioCtx.createBuffer(numCh, Math.max(1, writePos), sr);
+    for(let ch=0; ch<numCh; ch++){
+      result.getChannelData(ch).set(outArrays[ch].subarray(0, writePos));
+    }
+    return result;
+  }
+
   // ---------- preview ----------
   function formatTime(sec){
     sec = Math.max(0, sec || 0);
@@ -825,22 +1024,51 @@ button.tap:hover{background:var(--amber);color:#1a1208;}
     updateSeekUI();
   }
 
-  previewBtn.addEventListener('click', () => {
-    if(!audioBuffer) return;
+  async function renderAndPlay(){
+    if(!audioBuffer || isRendering) return;
+    isRendering = true;
+    const myToken = ++renderToken;
+    previewBtn.disabled = true;
+    speedBtns.forEach(b => b.disabled = true);
     if(playingNode){ manualStop = true; try{ playingNode.stop(); }catch(e){} playingNode = null; }
-    setStatus('レンダリング中…');
-    setTimeout(() => {
-      try{
-        previewBuffer = renderOutputBuffer();
-        lastPosition = 0;
-        playFrom(0);
-        setStatus('プレビュー再生中…', 'ok');
-      }catch(err){
-        console.error(err);
-        setStatus('プレビューに失敗しました: ' + err.message, 'err');
+    setStatus(speed !== 1 ? 'レンダリング中…（ピッチを保ったまま速度を変更しています。少し時間がかかる場合があります）' : 'レンダリング中…');
+    await new Promise(r => setTimeout(r, 10));
+    try{
+      let buf = renderOutputBuffer();
+      if(speed !== 1){
+        buf = await timeStretchBuffer(buf, speed, myToken, frac => {
+          if(myToken === renderToken) setStatus(`レンダリング中…（ピッチを保ったまま速度を変更しています ${Math.round(frac*100)}%）`);
+        });
+        if(buf === null || myToken !== renderToken) return; // superseded by a newer request
       }
-    }, 10);
+      previewBuffer = buf;
+      lastPosition = 0;
+      playFrom(0);
+      setStatus('プレビュー再生中…', 'ok');
+    }catch(err){
+      console.error(err);
+      setStatus('プレビューに失敗しました: ' + err.message, 'err');
+    }finally{
+      if(myToken === renderToken){
+        isRendering = false;
+        previewBtn.disabled = false;
+        speedBtns.forEach(b => b.disabled = false);
+      }
+    }
+  }
+
+  speedBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      if(isRendering) return;
+      const newSpeed = parseFloat(btn.dataset.speed);
+      if(newSpeed === speed) return;
+      speed = newSpeed;
+      speedBtns.forEach(b => b.classList.toggle('active', b === btn));
+      if(audioBuffer) renderAndPlay(); // re-render immediately so the new speed is actually heard
+    });
   });
+
+  previewBtn.addEventListener('click', renderAndPlay);
 
   stopBtn.addEventListener('click', stopPreview);
   function stopPreview(){
@@ -880,12 +1108,16 @@ button.tap:hover{background:var(--amber);color:#1a1208;}
 
   // ---------- export ----------
   exportBtn.addEventListener('click', async () => {
-    if(!audioBuffer) return;
+    if(!audioBuffer || isRendering) return;
+    isRendering = true;
+    previewBtn.disabled = true;
+    speedBtns.forEach(b => b.disabled = true);
     setStatus('出力を生成中…');
     exportBtn.disabled = true;
     try{
       await new Promise(r => setTimeout(r, 10));
-      const buf = renderOutputBuffer();
+      let buf = renderOutputBuffer();
+      if(speed !== 1) buf = await timeStretchBuffer(buf, speed);
       const format = formatSelect.value;
       let blob, extension;
       if(format === 'wav'){
@@ -910,6 +1142,9 @@ button.tap:hover{background:var(--amber);color:#1a1208;}
       setStatus('出力に失敗しました: ' + err.message, 'err');
     }finally{
       exportBtn.disabled = false;
+      isRendering = false;
+      previewBtn.disabled = false;
+      speedBtns.forEach(b => b.disabled = false);
     }
   });
 
