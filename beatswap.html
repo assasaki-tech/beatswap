@@ -249,6 +249,9 @@ button.speed-btn.active:hover{color:#fff0e2;border-color:var(--amber);}
   border-top:1px solid var(--panel-line);
 }
 .mini-footer a{color:var(--amber);}
+button.pitch-btn{padding:6px 12px;font-size:12px;}
+button.pitch-btn.active{background:var(--amber-dim);border-color:var(--amber);color:#fff0e2;}
+button.pitch-btn.active:hover{color:#fff0e2;border-color:var(--amber);}
 .speed-note{font-size:10.5px;color:var(--red);margin-top:8px;line-height:1.6;}
 </style>
 </head>
@@ -336,12 +339,17 @@ button.speed-btn.active:hover{color:#fff0e2;border-color:var(--amber);}
       <span class="time-label" id="timeLabel">0:00 / 0:00</span>
     </div>
     <div class="speed-row">
-      <span class="speed-label">曲の速さ（ピッチ維持）</span>
+      <span class="speed-label">曲の速さ</span>
       <button class="speed-btn active" data-speed="1" disabled>100%</button>
       <button class="speed-btn" data-speed="0.75" disabled>75%</button>
       <button class="speed-btn" data-speed="0.5" disabled>50%</button>
     </div>
-    <div class="speed-note">※ テンポ変更機能はテスト中の機能です。動作が不安定になる場合や、音が歪む場合があります。</div>
+    <div class="speed-row">
+      <span class="speed-label">ピッチ</span>
+      <button class="pitch-btn active" data-pitch="keep" disabled>維持（テスト中）</button>
+      <button class="pitch-btn" data-pitch="change" disabled>変化（速度に連動）</button>
+    </div>
+    <div class="speed-note">※ ピッチ「維持」はテスト中の機能です。動作が不安定になる場合や、音が歪む場合があります。ピッチ「変化」はテープの回転数を変えるのと同じ単純な処理で、速度を下げると音も低くなります。</div>
   </section>
 
   <div id="status">ファイルを読み込んでください。</div>
@@ -364,6 +372,7 @@ button.speed-btn.active:hover{color:#fff0e2;border-color:var(--amber);}
   let playingNode = null;
   let playStartCtxTime = 0;
   let speed = 1;
+  let pitchMode = 'keep'; // 'keep' = pitch-preserving stretch, 'change' = simple resample (pitch follows speed)
   let previewBuffer = null;
   let isPlaying = false;
   let isRendering = false;
@@ -395,6 +404,8 @@ button.speed-btn.active:hover{color:#fff0e2;border-color:var(--amber);}
   const seekBar = el('seekBar');
   const timeLabel = el('timeLabel');
   const speedBtns = document.querySelectorAll('.speed-btn');
+  const pitchBtns = document.querySelectorAll('.pitch-btn');
+  const speedCtrlBtns = document.querySelectorAll('.speed-btn, .pitch-btn');
   const exportBtn = el('exportBtn');
   const formatSelect = el('formatSelect');
   const downloadLink = el('downloadLink');
@@ -443,7 +454,7 @@ button.speed-btn.active:hover{color:#fff0e2;border-color:var(--amber);}
       fname.textContent = `${file.name} (${decoded.duration.toFixed(1)}秒 / ${decoded.sampleRate}Hz / ${decoded.numberOfChannels}ch)`;
       mapping = {1:1,2:2,3:3,4:4};
       muted = {1:false,2:false,3:false,4:false};
-      [tapBtn, tapResetBtn, autoDetectBtn, offsetAutoBtn, resetGridBtn, previewBtn, exportBtn, ...speedBtns].forEach(b => b.disabled = false);
+      [tapBtn, tapResetBtn, autoDetectBtn, offsetAutoBtn, resetGridBtn, previewBtn, exportBtn, ...speedCtrlBtns].forEach(b => b.disabled = false);
       downloadLink.style.display = 'none';
       buildPads();
       drawWaveform();
@@ -813,6 +824,29 @@ button.speed-btn.active:hover{color:#fff0e2;border-color:var(--amber);}
   // speedFactor < 1 = slower (longer output), > 1 = faster (shorter output).
   // Runs in small chunks (yielding to the event loop) so the page never freezes,
   // and can be cancelled early via `token` if a newer request supersedes it.
+  // Simple linear-interpolation resample: duration AND pitch change together (like a tape speed change).
+  function resampleBuffer(buffer, rate){
+    if(rate === 1) return buffer;
+    const numCh = buffer.numberOfChannels;
+    const sr = buffer.sampleRate;
+    const newLength = Math.max(1, Math.round(buffer.length / rate));
+    const out = audioCtx.createBuffer(numCh, newLength, sr);
+    for(let ch=0; ch<numCh; ch++){
+      const inData = buffer.getChannelData(ch);
+      const outData = out.getChannelData(ch);
+      for(let i=0; i<newLength; i++){
+        const srcPos = i*rate;
+        const idx0 = Math.floor(srcPos);
+        const idx1 = Math.min(buffer.length-1, idx0+1);
+        const frac = srcPos-idx0;
+        const s0 = inData[idx0] || 0;
+        const s1 = inData[idx1] || 0;
+        outData[i] = s0 + (s1-s0)*frac;
+      }
+    }
+    return out;
+  }
+
   function detectOnsetsRaw(sig, sr, minSpacingSec, thresholdMult){
     const hopSize = Math.max(1, Math.round(sr*0.005));
     const frameSize = Math.max(1, Math.round(sr*0.01));
@@ -1029,17 +1063,21 @@ button.speed-btn.active:hover{color:#fff0e2;border-color:var(--amber);}
     isRendering = true;
     const myToken = ++renderToken;
     previewBtn.disabled = true;
-    speedBtns.forEach(b => b.disabled = true);
+    speedCtrlBtns.forEach(b => b.disabled = true);
     if(playingNode){ manualStop = true; try{ playingNode.stop(); }catch(e){} playingNode = null; }
-    setStatus(speed !== 1 ? 'レンダリング中…（ピッチを保ったまま速度を変更しています。少し時間がかかる場合があります）' : 'レンダリング中…');
+    setStatus(speed !== 1 ? (pitchMode === 'keep' ? 'レンダリング中…（ピッチを保ったまま速度を変更しています。少し時間がかかる場合があります）' : 'レンダリング中…（速度を変更しています）') : 'レンダリング中…');
     await new Promise(r => setTimeout(r, 10));
     try{
       let buf = renderOutputBuffer();
       if(speed !== 1){
-        buf = await timeStretchBuffer(buf, speed, myToken, frac => {
-          if(myToken === renderToken) setStatus(`レンダリング中…（ピッチを保ったまま速度を変更しています ${Math.round(frac*100)}%）`);
-        });
-        if(buf === null || myToken !== renderToken) return; // superseded by a newer request
+        if(pitchMode === 'change'){
+          buf = resampleBuffer(buf, speed);
+        }else{
+          buf = await timeStretchBuffer(buf, speed, myToken, frac => {
+            if(myToken === renderToken) setStatus(`レンダリング中…（ピッチを保ったまま速度を変更しています ${Math.round(frac*100)}%）`);
+          });
+          if(buf === null || myToken !== renderToken) return; // superseded by a newer request
+        }
       }
       previewBuffer = buf;
       lastPosition = 0;
@@ -1052,7 +1090,7 @@ button.speed-btn.active:hover{color:#fff0e2;border-color:var(--amber);}
       if(myToken === renderToken){
         isRendering = false;
         previewBtn.disabled = false;
-        speedBtns.forEach(b => b.disabled = false);
+        speedCtrlBtns.forEach(b => b.disabled = false);
       }
     }
   }
@@ -1065,6 +1103,17 @@ button.speed-btn.active:hover{color:#fff0e2;border-color:var(--amber);}
       speed = newSpeed;
       speedBtns.forEach(b => b.classList.toggle('active', b === btn));
       if(audioBuffer) renderAndPlay(); // re-render immediately so the new speed is actually heard
+    });
+  });
+
+  pitchBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      if(isRendering) return;
+      const newMode = btn.dataset.pitch;
+      if(newMode === pitchMode) return;
+      pitchMode = newMode;
+      pitchBtns.forEach(b => b.classList.toggle('active', b === btn));
+      if(audioBuffer && speed !== 1) renderAndPlay(); // only audible when speed is not 100%
     });
   });
 
@@ -1111,13 +1160,13 @@ button.speed-btn.active:hover{color:#fff0e2;border-color:var(--amber);}
     if(!audioBuffer || isRendering) return;
     isRendering = true;
     previewBtn.disabled = true;
-    speedBtns.forEach(b => b.disabled = true);
+    speedCtrlBtns.forEach(b => b.disabled = true);
     setStatus('出力を生成中…');
     exportBtn.disabled = true;
     try{
       await new Promise(r => setTimeout(r, 10));
       let buf = renderOutputBuffer();
-      if(speed !== 1) buf = await timeStretchBuffer(buf, speed);
+      if(speed !== 1) buf = (pitchMode === 'change') ? resampleBuffer(buf, speed) : await timeStretchBuffer(buf, speed);
       const format = formatSelect.value;
       let blob, extension;
       if(format === 'wav'){
@@ -1144,7 +1193,7 @@ button.speed-btn.active:hover{color:#fff0e2;border-color:var(--amber);}
       exportBtn.disabled = false;
       isRendering = false;
       previewBtn.disabled = false;
-      speedBtns.forEach(b => b.disabled = false);
+      speedCtrlBtns.forEach(b => b.disabled = false);
     }
   });
 
